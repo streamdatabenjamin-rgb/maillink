@@ -55,10 +55,47 @@ def create_message(to, subject, body, is_html=True):
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     return {"raw": raw}
 
-def send_email(service, to, subject, body):
-    """Send the email using Gmail API."""
+
+def get_or_create_label(service, label_name="MailMerge"):
+    """Get label ID by name, or create it if it doesn't exist."""
+    try:
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        for label in labels:
+            if label["name"].lower() == label_name.lower():
+                return label["id"]
+
+        # Create new label if not found
+        label_body = {
+            "name": label_name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show"
+        }
+        label = service.users().labels().create(userId="me", body=label_body).execute()
+        return label["id"]
+    except Exception as e:
+        st.error(f"⚠️ Failed to get/create label: {e}")
+        return None
+
+
+def send_email(service, to, subject, body, label_name="MailMerge"):
+    """Send the email using Gmail API and apply a label."""
     message = create_message(to, subject, body, is_html=True)
-    return service.users().messages().send(userId="me", body=message).execute()
+    try:
+        sent_message = service.users().messages().send(userId="me", body=message).execute()
+
+        # Get or create label ID
+        label_id = get_or_create_label(service, label_name)
+        if label_id:
+            service.users().messages().modify(
+                userId="me",
+                id=sent_message["id"],
+                body={"addLabelIds": [label_id]}
+            ).execute()
+
+        return sent_message
+    except HttpError as e:
+        st.error(f"❌ Error sending email: {e}")
+        return None
 
 # ========================================
 # OAuth Flow
@@ -138,10 +175,11 @@ if uploaded_file:
         st.warning("⚠️ Some placeholders might not match your CSV column names.")
 
     # ========================================
-    # Delay Option
+    # Sending Options
     # ========================================
     st.header("⏱️ Sending Options")
     delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
+    label_name = st.text_input("📛 Gmail Label Name", value="MailMerge")
 
     # ========================================
     # Send Emails
@@ -166,7 +204,7 @@ if uploaded_file:
                 body = body_template  # fallback if placeholder mismatch
 
             try:
-                send_email(service, to_addr, subject, body)
+                send_email(service, to_addr, subject, body, label_name=label_name)
                 sent_count += 1
                 st.write(f"✅ Sent to: {to_addr}")
                 time.sleep(delay)
