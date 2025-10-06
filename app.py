@@ -81,11 +81,8 @@ def convert_bold(text):
     """
     if not text:
         return ""
-    # Escape HTML tags
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    # Convert **bold** to <b>bold</b>
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
-    # Convert line breaks to <br> for Gmail
     text = text.replace("\n", "<br>")
     return text
 
@@ -150,7 +147,36 @@ if uploaded_file:
     )
 
     # ========================================
-    # Label & Delay
+    # Preview Email Template
+    # ========================================
+    st.subheader("👁️ Preview Your Email")
+
+    if not df.empty:
+        # Dropdown to select which row to preview
+        recipient_options = df["Email"].astype(str).tolist()
+        selected_email = st.selectbox("Select recipient to preview", recipient_options)
+        try:
+            preview_row = df[df["Email"] == selected_email].iloc[0]
+
+            # Format subject and body
+            preview_subject = subject_template.format(**preview_row)
+            preview_body = body_template.format(**preview_row)
+            preview_html = convert_bold(preview_body)
+
+            st.markdown(f"**Subject:** {preview_subject}")
+            st.markdown("---")
+            st.markdown("**Email Body Preview:**")
+            st.markdown(preview_html, unsafe_allow_html=True)
+
+        except KeyError as e:
+            st.error(f"⚠️ Missing column in data: {e}")
+        except Exception as e:
+            st.error(f"Error rendering preview: {e}")
+    else:
+        st.info("📂 Upload your file and compose your message to preview.")
+
+    # ========================================
+    # Label & Delay Options
     # ========================================
     st.header("🏷️ Label & Timing Options")
     label_name = st.text_input("Gmail label to apply", value="Mail Merge Sent")
@@ -166,6 +192,7 @@ if uploaded_file:
         errors = []
 
         with st.spinner("📨 Sending emails... please wait."):
+
             for idx, row in df.iterrows():
                 to_addr_raw = str(row.get("Email", "")).strip()
                 to_addr = extract_email(to_addr_raw)
