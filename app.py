@@ -87,12 +87,14 @@ def send_email(service, to, subject, body, label_name="MailMerge"):
         return None
 
 # ========================================
-# Robust OAuth Flow
+# Robust OAuth Flow (fixed rerun issue)
 # ========================================
 if "creds" not in st.session_state:
     st.session_state["creds"] = None
 if "creds_scopes" not in st.session_state:
     st.session_state["creds_scopes"] = None
+if "rerun_flag" not in st.session_state:
+    st.session_state["rerun_flag"] = False
 
 def needs_reauth():
     if not st.session_state.get("creds"):
@@ -117,7 +119,9 @@ if needs_reauth():
             creds = flow.credentials
             st.session_state["creds"] = creds.to_json()
             st.session_state["creds_scopes"] = SCOPES
-            st.experimental_rerun()
+            # trigger a soft rerun by toggling a flag
+            st.session_state["rerun_flag"] = not st.session_state["rerun_flag"]
+            st.stop()
         except Exception as e:
             st.error(f"⚠️ OAuth token exchange failed: {e}")
             st.stop()
