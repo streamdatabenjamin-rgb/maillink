@@ -47,17 +47,15 @@ def extract_email(value: str):
 # ========================================
 # Gmail Helpers
 # ========================================
-def create_message(to, subject, body, is_html=True):
-    """Create email message (supports HTML or plain text)."""
-    message = MIMEText(body, "html" if is_html else "plain")
+def create_message(to, subject, body):
+    message = MIMEText(body)
     message["to"] = to
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     return {"raw": raw}
 
 def send_email(service, to, subject, body):
-    """Send the email using Gmail API."""
-    message = create_message(to, subject, body, is_html=True)
+    message = create_message(to, subject, body)
     return service.users().messages().send(userId="me", body=message).execute()
 
 # ========================================
@@ -108,44 +106,16 @@ if uploaded_file:
     st.dataframe(df.head())
 
     # ========================================
-    # Email Template (with HTML)
+    # Email Template
     # ========================================
     st.header("✍️ Compose Your Email")
     subject_template = st.text_input("Subject", "Hello {Name}")
+    body_template = st.text_area("Body", "Dear {Name},\n\nThis is a test mail.\n\nRegards,\nYour Company")
 
-    default_body = """<p><b>Dear {Name},</b></p>
-    <p>We’d like to invite you to explore our latest <a href="https://phoenixxit.com" target="_blank" style="color:#007BFF;">Phoenixx IT Properties</a>.</p>
-    <p>Thank you for your continued support.</p>
-    <p>Best Regards,<br><b>Team Phoenixx IT</b></p>"""
-
-    body_template = st.text_area("Body (HTML supported)", default_body, height=250)
-
-    st.markdown("""
-    💡 **Tips for formatting:**  
-    - Use `<b>Bold</b>`, `<i>Italic</i>`, `<u>Underline</u>`  
-    - Add links: `<a href="https://yourlink.com">Click Here</a>`  
-    - Change colors: `<span style="color:red;">Text</span>`  
-    """)
-
-    # ========================================
-    # Live HTML Preview
-    # ========================================
-    st.markdown("### 📄 Email Preview")
-    try:
-        preview_html = body_template.format(**{col: f"Sample_{col}" for col in df.columns})
-        st.markdown(preview_html, unsafe_allow_html=True)
-    except Exception:
-        st.warning("⚠️ Some placeholders might not match your CSV column names.")
-
-    # ========================================
     # Delay Option
-    # ========================================
     st.header("⏱️ Sending Options")
     delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
 
-    # ========================================
-    # Send Emails
-    # ========================================
     if st.button("🚀 Send Emails"):
         sent_count = 0
         skipped = []
@@ -160,16 +130,12 @@ if uploaded_file:
                 continue
 
             subject = subject_template.format(**row)
-            try:
-                body = body_template.format(**row)
-            except Exception:
-                body = body_template  # fallback if placeholder mismatch
+            body = body_template.format(**row)
 
             try:
                 send_email(service, to_addr, subject, body)
                 sent_count += 1
-                st.write(f"✅ Sent to: {to_addr}")
-                time.sleep(delay)
+                time.sleep(delay)  # ✅ custom delay between emails
             except Exception as e:
                 errors.append((to_addr, str(e)))
 
