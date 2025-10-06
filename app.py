@@ -8,7 +8,6 @@ from email.mime.text import MIMEText
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
 from googleapiclient.errors import HttpError
 
 # ========================================
@@ -20,7 +19,11 @@ st.title("📧 Gmail Mail Merge Tool")
 # ========================================
 # Gmail API Setup
 # ========================================
-SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+# Updated scopes: send emails + manage labels
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.labels"
+]
 
 CLIENT_CONFIG = {
     "web": {
@@ -38,7 +41,6 @@ CLIENT_CONFIG = {
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
 
 def extract_email(value: str):
-    """Extracts the first valid email from a string, or None if not found."""
     if not value:
         return None
     match = EMAIL_REGEX.search(str(value))
@@ -48,7 +50,6 @@ def extract_email(value: str):
 # Gmail Helpers
 # ========================================
 def create_message(to, subject, body, is_html=True):
-    """Create email message (supports HTML or plain text)."""
     message = MIMEText(body, "html" if is_html else "plain")
     message["to"] = to
     message["subject"] = subject
@@ -78,12 +79,9 @@ def get_or_create_label(service, label_name="MailMerge"):
 
 
 def send_email(service, to, subject, body, label_name="MailMerge"):
-    """Send the email using Gmail API and apply a label."""
     message = create_message(to, subject, body, is_html=True)
     try:
         sent_message = service.users().messages().send(userId="me", body=message).execute()
-
-        # Get or create label ID
         label_id = get_or_create_label(service, label_name)
         if label_id:
             service.users().messages().modify(
@@ -91,7 +89,6 @@ def send_email(service, to, subject, body, label_name="MailMerge"):
                 id=sent_message["id"],
                 body={"addLabelIds": [label_id]}
             ).execute()
-
         return sent_message
     except HttpError as e:
         st.error(f"❌ Error sending email: {e}")
@@ -104,9 +101,7 @@ if "creds" not in st.session_state:
     st.session_state["creds"] = None
 
 if st.session_state["creds"]:
-    creds = Credentials.from_authorized_user_info(
-        json.loads(st.session_state["creds"]), SCOPES
-    )
+    creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 else:
     code = st.experimental_get_query_params().get("code", None)
     if code:
@@ -120,9 +115,7 @@ else:
         flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
         flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
         auth_url, _ = flow.authorization_url(prompt="consent")
-        st.markdown(
-            f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account."
-        )
+        st.markdown(f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account.")
         st.stop()
 
 # Build Gmail API client
@@ -201,7 +194,7 @@ if uploaded_file:
             try:
                 body = body_template.format(**row)
             except Exception:
-                body = body_template  # fallback if placeholder mismatch
+                body = body_template
 
             try:
                 send_email(service, to_addr, subject, body, label_name=label_name)
