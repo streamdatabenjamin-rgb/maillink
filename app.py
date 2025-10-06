@@ -48,22 +48,17 @@ def extract_email(value: str):
     match = EMAIL_REGEX.search(str(value))
     return match.group(0) if match else None
 
-
 # ========================================
 # Gmail Label Helpers
 # ========================================
 def get_or_create_label(service, label_name="Mail Merge Sent"):
-    """
-    Returns the label ID for the given label name.
-    Creates the label if it doesn't exist.
-    """
+    """Returns the label ID for the given label name, creates it if missing."""
     try:
         labels = service.users().labels().list(userId="me").execute().get("labels", [])
         for label in labels:
             if label["name"].lower() == label_name.lower():
                 return label["id"]
 
-        # If label not found, create it
         label_obj = {
             "name": label_name,
             "labelListVisibility": "labelShow",
@@ -76,21 +71,23 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
         st.warning(f"Could not get/create label: {e}")
         return None
 
-
-def send_email_with_label(service, to, subject, body, label_id=None):
-    """Send an email and apply a Gmail label if provided."""
-    message = MIMEText(body)
-    message["to"] = to
-    message["subject"] = subject
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-
-    msg_body = {"raw": raw}
-    if label_id:
-        msg_body["labelIds"] = [label_id]
-
-    sent_message = service.users().messages().send(userId="me", body=msg_body).execute()
-    return sent_message
-
+# ========================================
+# Bold Text Converter
+# ========================================
+def convert_bold(text):
+    """
+    Converts **bold** syntax to <b>bold</b> while escaping other HTML.
+    Keeps everything else as plain text.
+    """
+    if not text:
+        return ""
+    # Escape HTML tags
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Convert **bold** to <b>bold</b>
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    # Convert line breaks to <br> for Gmail
+    text = text.replace("\n", "<br>")
+    return text
 
 # ========================================
 # OAuth Flow
@@ -114,7 +111,9 @@ else:
     else:
         flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
         flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
-        auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline", include_granted_scopes="true")
+        auth_url, _ = flow.authorization_url(
+            prompt="consent", access_type="offline", include_granted_scopes="true"
+        )
         st.markdown(
             f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account."
         )
@@ -144,7 +143,11 @@ if uploaded_file:
     # ========================================
     st.header("✍️ Compose Your Email")
     subject_template = st.text_input("Subject", "Hello {Name}")
-    body_template = st.text_area("Body", "Dear {Name},\n\nThis is a test mail.\n\nRegards,\nYour Company")
+    body_template = st.text_area(
+        "Body (use **bold** for emphasis)",
+        "Dear {Name},\n\nThis is a **test mail**.\n\nRegards,\nYour Company",
+        height=200
+    )
 
     # ========================================
     # Label & Delay
@@ -172,8 +175,20 @@ if uploaded_file:
 
                 try:
                     subject = subject_template.format(**row)
-                    body = body_template.format(**row)
-                    send_email_with_label(service, to_addr, subject, body, label_id)
+                    body_text = body_template.format(**row)
+                    html_body = convert_bold(body_text)
+
+                    # Build HTML email
+                    message = MIMEText(html_body, "html")
+                    message["to"] = to_addr
+                    message["subject"] = subject
+                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                    msg_body = {"raw": raw}
+                    if label_id:
+                        msg_body["labelIds"] = [label_id]
+
+                    service.users().messages().send(userId="me", body=msg_body).execute()
+
                     sent_count += 1
                     time.sleep(delay)
                 except Exception as e:
