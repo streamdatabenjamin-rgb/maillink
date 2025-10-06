@@ -1,17 +1,17 @@
 [theme]
-base="light"
-primaryColor="#007BFF"
-backgroundColor="#F8F9FA"
-secondaryBackgroundColor="#FFFFFF"
-textColor="#000000"
-font="sans serif"
+primaryColor = "#007BFF"         # Brand blue
+backgroundColor = "#F8FAFC"      # Soft white background
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E293B"            # Dark navy-gray text
+font = "sans serif"
 
 [server]
-enableXsrfProtection=true
-enableCORS=false
-headless=true
-port=8501
+headless = true
+port = 8501
+enableCORS = false
 
-[ui]
-pageTitle="Phoenixx IT Mail Merge"
-pageIcon="📧"
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
