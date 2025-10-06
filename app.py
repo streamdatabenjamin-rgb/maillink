@@ -35,7 +35,7 @@ CLIENT_CONFIG = {
 }
 
 # ========================================
-# Smart Email Extractor
+# Email Helpers
 # ========================================
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
 
@@ -45,9 +45,6 @@ def extract_email(value: str):
     match = EMAIL_REGEX.search(str(value))
     return match.group(0) if match else None
 
-# ========================================
-# Gmail Helpers
-# ========================================
 def create_message(to, subject, body, is_html=True):
     message = MIMEText(body, "html" if is_html else "plain")
     message["to"] = to
@@ -69,7 +66,7 @@ def get_or_create_label(service, label_name="MailMerge"):
         }
         label = service.users().labels().create(userId="me", body=label_body).execute()
         return label["id"]
-    except Exception as e:
+    except HttpError as e:
         st.error(f"⚠️ Failed to get/create label: {e}")
         return None
 
@@ -92,7 +89,6 @@ def send_email(service, to, subject, body, label_name="MailMerge"):
 # ========================================
 # Robust OAuth Flow
 # ========================================
-# Initialize session_state keys
 if "creds" not in st.session_state:
     st.session_state["creds"] = None
 if "creds_scopes" not in st.session_state:
