@@ -8,8 +8,6 @@ from email.mime.text import MIMEText
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
-from googleapiclient.errors import HttpError
 
 # ========================================
 # Streamlit Page Setup
@@ -21,9 +19,7 @@ st.title("📧 Gmail Mail Merge Tool")
 # Gmail API Setup
 # ========================================
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/gmail.send"
 ]
 
 CLIENT_CONFIG = {
@@ -49,35 +45,11 @@ def extract_email(value: str):
     return match.group(0) if match else None
 
 # ========================================
-# Gmail Label Helpers
-# ========================================
-def get_or_create_label(service, label_name="Mail Merge Sent"):
-    """Returns the label ID for the given label name, creates it if missing."""
-    try:
-        labels = service.users().labels().list(userId="me").execute().get("labels", [])
-        for label in labels:
-            if label["name"].lower() == label_name.lower():
-                return label["id"]
-
-        label_obj = {
-            "name": label_name,
-            "labelListVisibility": "labelShow",
-            "messageListVisibility": "show",
-        }
-        created_label = service.users().labels().create(userId="me", body=label_obj).execute()
-        return created_label["id"]
-
-    except Exception as e:
-        st.warning(f"Could not get/create label: {e}")
-        return None
-
-# ========================================
 # Bold Text Converter
 # ========================================
 def convert_bold(text):
     """
     Converts **bold** syntax to <b>bold</b> while escaping other HTML.
-    Keeps everything else as plain text.
     """
     if not text:
         return ""
@@ -150,15 +122,11 @@ if uploaded_file:
     # Preview Email Template
     # ========================================
     st.subheader("👁️ Preview Your Email")
-
     if not df.empty:
-        # Dropdown to select which row to preview
         recipient_options = df["Email"].astype(str).tolist()
         selected_email = st.selectbox("Select recipient to preview", recipient_options)
         try:
             preview_row = df[df["Email"] == selected_email].iloc[0]
-
-            # Format subject and body
             preview_subject = subject_template.format(**preview_row)
             preview_body = body_template.format(**preview_row)
             preview_html = convert_bold(preview_body)
@@ -167,7 +135,6 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("**Email Body Preview:**")
             st.markdown(preview_html, unsafe_allow_html=True)
-
         except KeyError as e:
             st.error(f"⚠️ Missing column in data: {e}")
         except Exception as e:
@@ -176,23 +143,33 @@ if uploaded_file:
         st.info("📂 Upload your file and compose your message to preview.")
 
     # ========================================
-    # Label & Delay Options
+    # Label & Delay Options (Label Hidden)
     # ========================================
-    st.header("🏷️ Label & Timing Options")
+    st.header("⏱️ Timing Options")
+    # Label input exists in code but hidden via CSS
     label_name = st.text_input("Gmail label to apply", value="Mail Merge Sent")
+    st.markdown(
+        """
+        <style>
+        label[for="Gmail label to apply"], input[aria-label="Gmail label to apply"] {
+            display: none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    # Delay input visible
     delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
 
     # ========================================
     # Send Emails
     # ========================================
     if st.button("🚀 Send Emails"):
-        label_id = get_or_create_label(service, label_name)
         sent_count = 0
         skipped = []
         errors = []
 
         with st.spinner("📨 Sending emails... please wait."):
-
             for idx, row in df.iterrows():
                 to_addr_raw = str(row.get("Email", "")).strip()
                 to_addr = extract_email(to_addr_raw)
@@ -205,15 +182,13 @@ if uploaded_file:
                     body_text = body_template.format(**row)
                     html_body = convert_bold(body_text)
 
-                    # Build HTML email
                     message = MIMEText(html_body, "html")
                     message["to"] = to_addr
                     message["subject"] = subject
                     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                     msg_body = {"raw": raw}
-                    if label_id:
-                        msg_body["labelIds"] = [label_id]
 
+                    # Send email (no label applied)
                     service.users().messages().send(userId="me", body=msg_body).execute()
 
                     sent_count += 1
