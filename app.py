@@ -90,10 +90,12 @@ def send_email(service, to, subject, body, label_name="MailMerge"):
         return None
 
 # ========================================
-# OAuth Flow with automatic re-authorization
+# Robust OAuth Flow
 # ========================================
+# Initialize session_state keys
 if "creds" not in st.session_state:
     st.session_state["creds"] = None
+if "creds_scopes" not in st.session_state:
     st.session_state["creds_scopes"] = None
 
 def needs_reauth():
@@ -109,14 +111,20 @@ if needs_reauth():
 
     flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
     flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
-    code = st.experimental_get_query_params().get("code", None)
 
-    if code:
-        flow.fetch_token(code=code[0])
-        creds = flow.credentials
-        st.session_state["creds"] = creds.to_json()
-        st.session_state["creds_scopes"] = SCOPES
-        st.experimental_rerun()
+    query_params = st.experimental_get_query_params()
+    code_list = query_params.get("code", None)
+
+    if code_list:
+        try:
+            flow.fetch_token(code=code_list[0])
+            creds = flow.credentials
+            st.session_state["creds"] = creds.to_json()
+            st.session_state["creds_scopes"] = SCOPES
+            st.experimental_rerun()
+        except Exception as e:
+            st.error(f"⚠️ OAuth token exchange failed: {e}")
+            st.stop()
     else:
         auth_url, _ = flow.authorization_url(prompt="consent")
         st.markdown(f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account.")
