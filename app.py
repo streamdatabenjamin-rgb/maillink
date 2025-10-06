@@ -22,6 +22,8 @@ st.title("📧 Gmail Mail Merge Tool")
 # ========================================
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.labels",
 ]
 
 CLIENT_CONFIG = {
@@ -47,10 +49,36 @@ def extract_email(value: str):
     return match.group(0) if match else None
 
 # ========================================
+# Gmail Label Helpers
+# ========================================
+def get_or_create_label(service, label_name="Mail Merge Sent"):
+    """Returns the label ID for the given label name, creates it if missing."""
+    try:
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        for label in labels:
+            if label["name"].lower() == label_name.lower():
+                return label["id"]
+
+        label_obj = {
+            "name": label_name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        }
+        created_label = service.users().labels().create(userId="me", body=label_obj).execute()
+        return created_label["id"]
+
+    except Exception as e:
+        st.warning(f"Could not get/create label: {e}")
+        return None
+
+# ========================================
 # Bold Text Converter
 # ========================================
 def convert_bold(text):
-    """Converts **bold** syntax to <b>bold</b> while escaping HTML."""
+    """
+    Converts **bold** syntax to <b>bold</b> while escaping other HTML.
+    Keeps everything else as plain text.
+    """
     if not text:
         return ""
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -148,15 +176,17 @@ if uploaded_file:
         st.info("📂 Upload your file and compose your message to preview.")
 
     # ========================================
-    # Delay Option
+    # Label & Delay Options
     # ========================================
-    st.header("⏱️ Timing Options")
+    st.header("🏷️ Label & Timing Options")
+    label_name = st.text_input("Gmail label to apply", value="Mail Merge Sent")
     delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
 
     # ========================================
     # Send Emails
     # ========================================
     if st.button("🚀 Send Emails"):
+        label_id = get_or_create_label(service, label_name)
         sent_count = 0
         skipped = []
         errors = []
@@ -180,7 +210,9 @@ if uploaded_file:
                     message["to"] = to_addr
                     message["subject"] = subject
                     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                    msg_body = {"raw": raw}  # No label applied
+                    msg_body = {"raw": raw}
+                    if label_id:
+                        msg_body["labelIds"] = [label_id]
 
                     service.users().messages().send(userId="me", body=msg_body).execute()
 
