@@ -1,0 +1,17 @@
+[theme]
+base="light"
+primaryColor="#007BFF"
+backgroundColor="#F8F9FA"
+secondaryBackgroundColor="#FFFFFF"
+textColor="#000000"
+font="sans serif"
+
+[server]
+enableXsrfProtection=true
+enableCORS=false
+headless=true
+port=8501
+
+[ui]
+pageTitle="Phoenixx IT Mail Merge"
+pageIcon="📧"
