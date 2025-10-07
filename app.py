@@ -74,20 +74,32 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
 
 
 # ========================================
-# Bold + Spacing Converter
+# Bold + Link + Spacing Converter
 # ========================================
 def convert_bold(text):
     """
-    Converts **bold** syntax to <b>bold</b> and preserves spacing & alignment.
+    Converts **bold** syntax to <b>bold</b>, [link](url) to HTML hyperlinks,
+    and preserves spaces & alignment.
     """
     if not text:
         return ""
+
     # Escape HTML
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     # Handle **bold**
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
-    # Preserve spaces & newlines
+
+    # Handle [text](https://url)
+    text = re.sub(
+        r"\[(.*?)\]\((https?://[^\s)]+)\)",
+        r'<a href="\2" target="_blank" style="color:#1a73e8;text-decoration:none;">\1</a>',
+        text,
+    )
+
+    # Preserve spaces and newlines
     text = text.replace("  ", "&nbsp;&nbsp;").replace("\n", "<br>")
+
     return text
 
 
@@ -149,7 +161,7 @@ if uploaded_file:
     subject_template = st.text_input("Subject", "Hello {Name}")
 
     body_template = st.text_area(
-        "Body Template (preserves spaces, alignment, and supports **bold**)",
+        "Body Template (preserves spaces, supports **bold** & [links](https://...))",
         value=(
             "Dear {Name},\n\n"
             "We’re excited to inform you that your subscription has been activated.\n"
@@ -157,6 +169,7 @@ if uploaded_file:
             "    Plan: {Plan}\n"
             "    Start Date: {StartDate}\n"
             "    Expiry Date: {EndDate}\n\n"
+            "Please [click here](https://yourcompany.com/dashboard) to access your account.\n\n"
             "If you have any questions, feel free to contact us.\n\n"
             "Regards,\n"
             "Your Company"
@@ -238,3 +251,12 @@ if uploaded_file:
 
                 except Exception as e:
                     errors.append((to_addr, str(e)))
+
+        # ========================================
+        # Final Summary
+        # ========================================
+        st.success(f"✅ Successfully sent {sent_count} emails.")
+        if skipped:
+            st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
+        if errors:
+            st.error(f"❌ Failed to send {len(errors)} emails: {errors}")
