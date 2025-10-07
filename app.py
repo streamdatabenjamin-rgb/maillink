@@ -48,6 +48,7 @@ def extract_email(value: str):
     match = EMAIL_REGEX.search(str(value))
     return match.group(0) if match else None
 
+
 # ========================================
 # Gmail Label Helpers
 # ========================================
@@ -71,20 +72,24 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
         st.warning(f"Could not get/create label: {e}")
         return None
 
+
 # ========================================
-# Bold Text Converter
+# Bold + Spacing Converter
 # ========================================
 def convert_bold(text):
     """
-    Converts **bold** syntax to <b>bold</b> while escaping other HTML.
-    Keeps everything else as plain text.
+    Converts **bold** syntax to <b>bold</b> and preserves spacing & alignment.
     """
     if not text:
         return ""
+    # Escape HTML
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Handle **bold**
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
-    text = text.replace("\n", "<br>")
+    # Preserve spaces & newlines
+    text = text.replace("  ", "&nbsp;&nbsp;").replace("\n", "<br>")
     return text
+
 
 # ========================================
 # OAuth Flow
@@ -120,6 +125,7 @@ else:
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 service = build("gmail", "v1", credentials=creds)
 
+
 # ========================================
 # Upload Recipients
 # ========================================
@@ -136,29 +142,39 @@ if uploaded_file:
     st.dataframe(df.head())
 
     # ========================================
-    # Email Template
+    # Email Template Input
     # ========================================
     st.header("✍️ Compose Your Email")
+
     subject_template = st.text_input("Subject", "Hello {Name}")
+
     body_template = st.text_area(
-        "Body (use **bold** for emphasis)",
-        "Dear {Name},\n\nThis is a **test mail**.\n\nRegards,\nYour Company",
-        height=200
+        "Body Template (preserves spaces, alignment, and supports **bold**)",
+        value=(
+            "Dear {Name},\n\n"
+            "We’re excited to inform you that your subscription has been activated.\n"
+            "Below are your details:\n\n"
+            "    Plan: {Plan}\n"
+            "    Start Date: {StartDate}\n"
+            "    Expiry Date: {EndDate}\n\n"
+            "If you have any questions, feel free to contact us.\n\n"
+            "Regards,\n"
+            "Your Company"
+        ),
+        height=250,
+        placeholder="Type or paste your full email template here...",
     )
 
     # ========================================
-    # Preview Email Template
+    # Preview Section
     # ========================================
     st.subheader("👁️ Preview Your Email")
 
     if not df.empty:
-        # Dropdown to select which row to preview
         recipient_options = df["Email"].astype(str).tolist()
         selected_email = st.selectbox("Select recipient to preview", recipient_options)
         try:
             preview_row = df[df["Email"] == selected_email].iloc[0]
-
-            # Format subject and body
             preview_subject = subject_template.format(**preview_row)
             preview_body = body_template.format(**preview_row)
             preview_html = convert_bold(preview_body)
@@ -167,7 +183,6 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("**Email Body Preview:**")
             st.markdown(preview_html, unsafe_allow_html=True)
-
         except KeyError as e:
             st.error(f"⚠️ Missing column in data: {e}")
         except Exception as e:
@@ -176,11 +191,13 @@ if uploaded_file:
         st.info("📂 Upload your file and compose your message to preview.")
 
     # ========================================
-    # Label & Delay Options
+    # Label & Delay
     # ========================================
     st.header("🏷️ Label & Timing Options")
     label_name = st.text_input("Gmail label to apply", value="Mail Merge Sent")
-    delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
+    delay = st.number_input(
+        "Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1
+    )
 
     # ========================================
     # Send Emails
@@ -205,7 +222,7 @@ if uploaded_file:
                     body_text = body_template.format(**row)
                     html_body = convert_bold(body_text)
 
-                    # Build HTML email
+                    # Build HTML message
                     message = MIMEText(html_body, "html")
                     message["to"] = to_addr
                     message["subject"] = subject
@@ -218,14 +235,6 @@ if uploaded_file:
 
                     sent_count += 1
                     time.sleep(delay)
+
                 except Exception as e:
                     errors.append((to_addr, str(e)))
-
-        # ========================================
-        # Final Summary
-        # ========================================
-        st.success(f"✅ Successfully sent {sent_count} emails.")
-        if skipped:
-            st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
-        if errors:
-            st.error(f"❌ Failed to send {len(errors)} emails: {errors}")
