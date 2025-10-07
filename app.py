@@ -202,7 +202,7 @@ Thanks,
     delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
 
     # ========================================
-    # Send Emails
+    # Send Emails (Option 1 — Label After Send)
     # ========================================
     if st.button("🚀 Send Emails"):
         label_id = get_or_create_label(service, label_name)
@@ -211,7 +211,6 @@ Thanks,
         errors = []
 
         with st.spinner("📨 Sending emails... please wait."):
-
             for idx, row in df.iterrows():
                 to_addr_raw = str(row.get("Email", "")).strip()
                 to_addr = extract_email(to_addr_raw)
@@ -230,13 +229,21 @@ Thanks,
                     message["subject"] = subject
                     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                     msg_body = {"raw": raw}
-                    if label_id:
-                        msg_body["labelIds"] = [label_id]
 
-                    service.users().messages().send(userId="me", body=msg_body).execute()
+                    # ✅ Step 1: Send email
+                    sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+
+                    # ✅ Step 2: Apply label after sending
+                    if label_id:
+                        service.users().messages().modify(
+                            userId="me",
+                            id=sent_msg["id"],
+                            body={"addLabelIds": [label_id]},
+                        ).execute()
 
                     sent_count += 1
                     time.sleep(delay)
+
                 except Exception as e:
                     errors.append((to_addr, str(e)))
 
