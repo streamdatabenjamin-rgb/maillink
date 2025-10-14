@@ -42,6 +42,12 @@ CLIENT_CONFIG = {
 }
 
 # ========================================
+# Autosave Setup
+# ========================================
+AUTOSAVE_PATH = os.path.join("/tmp", "mailmerge_autosave.csv")
+AUTOSAVE_NAME = "mailmerge_autosave.csv"
+
+# ========================================
 # Smart Email Extractor
 # ========================================
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
@@ -102,9 +108,7 @@ if "creds" not in st.session_state:
     st.session_state["creds"] = None
 
 if st.session_state["creds"]:
-    creds = Credentials.from_authorized_user_info(
-        json.loads(st.session_state["creds"]), SCOPES
-    )
+    creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 else:
     code = st.experimental_get_query_params().get("code", None)
     if code:
@@ -128,6 +132,21 @@ else:
 # Build Gmail API client
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 service = build("gmail", "v1", credentials=creds)
+
+# ========================================
+# 🔄 Recovery from Autosave
+# ========================================
+if os.path.exists(AUTOSAVE_PATH):
+    st.warning("⚠️ An autosave file from a previous session was found.")
+    col1, col2 = st.columns(2)
+    with col1:
+        with open(AUTOSAVE_PATH, "rb") as f:
+            st.download_button("⬇️ Download Autosave CSV", f, file_name=AUTOSAVE_NAME, mime="text/csv")
+    with col2:
+        if st.button("🗑️ Delete Autosave"):
+            os.remove(AUTOSAVE_PATH)
+            st.success("✅ Autosave deleted.")
+            st.rerun()
 
 # ========================================
 # Upload Recipients
@@ -156,16 +175,8 @@ if uploaded_file:
     st.dataframe(df.head())
     st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
 
-    # ========================================
-    # 🧹 Edit unsubscribed/unwanted rows
-    # ========================================
-    df = st.data_editor(
-        df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="recipient_editor_inline",
-        disabled=False
-    )
+    # Editable table
+    df = st.data_editor(df, num_rows="dynamic", use_container_width=True, key="recipient_editor_inline")
 
     # ========================================
     # Email Template
@@ -187,7 +198,7 @@ Thanks,
     )
 
     # ========================================
-    # Preview Section
+    # Preview
     # ========================================
     st.subheader("👁️ Preview Email")
     if not df.empty:
@@ -209,20 +220,11 @@ Thanks,
             st.error(f"⚠️ Missing column in data: {e}")
 
     # ========================================
-    # Label & Timing Options
+    # Label & Timing
     # ========================================
     st.header("🏷️ Label & Timing Options")
     label_name = st.text_input("Gmail label to apply (new emails only)", value="Mail Merge Sent")
-
-    delay = st.slider(
-        "Delay between emails (seconds)",
-        min_value=20,
-        max_value=75,
-        value=20,
-        step=1,
-        help="Minimum 20 seconds delay required for safe Gmail sending."
-    )
-
+    delay = st.slider("Delay between emails (seconds)", 20, 75, 20, 1)
     eta_ready = st.button("🕒 Ready to Send / Calculate ETA")
 
     if eta_ready:
@@ -241,10 +243,7 @@ Thanks,
         except Exception as e:
             st.warning(f"ETA calculation failed: {e}")
 
-    send_mode = st.radio(
-        "Choose sending mode",
-        ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"]
-    )
+    send_mode = st.radio("Choose sending mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
     # ========================================
     # Helper: Backup email function
@@ -261,7 +260,7 @@ Thanks,
 
             body = MIMEText(
                 "Attached is the backup CSV file for your recent mail merge run.\n\n"
-                "You can re-upload this file anytime for follow-ups.",
+                "If your sending was interrupted, an autosave file may also exist (/tmp/mailmerge_autosave.csv).",
                 "plain",
             )
             msg.attach(body)
@@ -273,7 +272,6 @@ Thanks,
 
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
             service.users().messages().send(userId="me", body={"raw": raw}).execute()
-
             st.info(f"📧 Backup CSV emailed to your Gmail inbox ({user_email}).")
 
         except Exception as e:
@@ -357,9 +355,7 @@ Thanks,
                     if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
                         try:
                             service.users().messages().modify(
-                                userId="me",
-                                id=sent_msg["id"],
-                                body={"addLabelIds": [label_id]},
+                                userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
                             ).execute()
                         except Exception:
                             st.warning(f"⚠️ Could not apply label to {to_addr}")
@@ -368,11 +364,25 @@ Thanks,
                     df.loc[idx, "RfcMessageId"] = message_id_header or ""
                     sent_count += 1
 
+                    # 🔄 Incremental Autosave
+                    if (idx + 1) % 5 == 0 or (idx + 1) == len(df):
+                        try:
+                            df.to_csv(AUTOSAVE_PATH, index=False)
+                            st.session_state["last_saved_csv"] = AUTOSAVE_PATH
+                            st.session_state["last_saved_name"] = AUTOSAVE_NAME
+                            st.info(f"💾 Autosaved progress ({idx + 1}/{len(df)})")
+                        except Exception as e:
+                            st.warning(f"⚠️ Autosave failed: {e}")
+
                 except Exception as e:
                     errors.append((to_addr, str(e)))
 
+        # ✅ Remove autosave if process completes
+        if os.path.exists(AUTOSAVE_PATH):
+            os.remove(AUTOSAVE_PATH)
+
         # ========================================
-        # CSV Backup + Download (New & Follow-up only)
+        # CSV Backup + Download
         # ========================================
         if send_mode in ["🆕 New Email", "↩️ Follow-up (Reply)"]:
             try:
@@ -380,15 +390,13 @@ Thanks,
                 safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
                 file_name = f"Updated_{safe_label}_{timestamp}.csv"
                 file_path = os.path.join("/tmp", file_name)
-
-                # Save updated CSV
                 df.to_csv(file_path, index=False)
+
                 st.session_state["last_saved_csv"] = file_path
                 st.session_state["last_saved_name"] = file_name
 
                 st.success("✅ Updated CSV saved successfully (can be used for follow-ups).")
 
-                # Manual download button
                 with open(file_path, "rb") as f:
                     st.download_button(
                         "⬇️ Download Updated CSV",
@@ -398,13 +406,12 @@ Thanks,
                         key=f"download_{file_name}"
                     )
 
-                # Send CSV backup email
                 send_email_backup(service, file_path)
 
             except Exception as e:
                 st.error(f"⚠️ CSV save or backup email failed: {e}")
 
-        else:  # Draft mode summary
+        else:
             st.success(f"📝 Saved {sent_count} draft(s) to Gmail Drafts.")
 
         if skipped:
