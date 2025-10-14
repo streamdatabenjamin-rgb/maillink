@@ -156,6 +156,9 @@ if uploaded_file:
     st.dataframe(df.head())
     st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
 
+    # ========================================
+    # 🧹 New Feature: Manually delete/edit unsubscribed or unwanted rows
+    # ========================================
     df = st.data_editor(
         df,
         num_rows="dynamic",
@@ -244,7 +247,7 @@ Thanks,
     )
 
     # ========================================
-    # Backup Helper
+    # Helper: Backup email function
     # ========================================
     def send_email_backup(service, csv_path):
         try:
@@ -277,20 +280,9 @@ Thanks,
             st.warning(f"⚠️ Could not send backup email: {e}")
 
     # ========================================
-    # Preserve Session State (Fix for UI Touch Issue)
-    # ========================================
-    if "sending_state" not in st.session_state:
-        st.session_state["sending_state"] = None
-
-    if st.session_state["sending_state"]:
-        df, label_name, delay, send_mode, subject_template, body_template = st.session_state["sending_state"]
-
-    # ========================================
     # 🚀 Send Emails / Save Drafts
     # ========================================
     if st.button("🚀 Send Emails / Save Drafts"):
-        st.session_state["sending_state"] = (df.copy(), label_name, delay, send_mode, subject_template, body_template)
-
         label_id = get_or_create_label(service, label_name)
         sent_count = 0
         skipped, errors = [], []
@@ -341,6 +333,7 @@ Thanks,
                     if delay > 0:
                         time.sleep(random.uniform(delay * 0.9, delay * 1.1))
 
+                    # Fetch Message-ID
                     message_id_header = None
                     for _ in range(5):
                         time.sleep(random.uniform(2, 4))
@@ -392,7 +385,7 @@ Thanks,
             st.error(f"❌ Failed to process {len(errors)}: {errors}")
 
         # ========================================
-        # Backup CSV + Email
+        # Hybrid Backup
         # ========================================
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
@@ -412,6 +405,3 @@ Thanks,
         )
 
         send_email_backup(service, file_path)
-
-        # Reset state after completion
-        st.session_state["sending_state"] = None
