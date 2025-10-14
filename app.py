@@ -157,7 +157,7 @@ if uploaded_file:
     st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
 
     # ========================================
-    # 🧹 New Feature: Manually delete/edit unsubscribed or unwanted rows
+    # 🧹 Edit unsubscribed/unwanted rows
     # ========================================
     df = st.data_editor(
         df,
@@ -372,36 +372,42 @@ Thanks,
                     errors.append((to_addr, str(e)))
 
         # ========================================
-        # Summary
+        # CSV Backup + Download (New & Follow-up only)
         # ========================================
-        if send_mode == "💾 Save as Draft":
+        if send_mode in ["🆕 New Email", "↩️ Follow-up (Reply)"]:
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+                file_name = f"Updated_{safe_label}_{timestamp}.csv"
+                file_path = os.path.join("/tmp", file_name)
+
+                # Save updated CSV
+                df.to_csv(file_path, index=False)
+                st.session_state["last_saved_csv"] = file_path
+                st.session_state["last_saved_name"] = file_name
+
+                st.success("✅ Updated CSV saved successfully (can be used for follow-ups).")
+
+                # Manual download button
+                with open(file_path, "rb") as f:
+                    st.download_button(
+                        "⬇️ Download Updated CSV",
+                        data=f,
+                        file_name=file_name,
+                        mime="text/csv",
+                        key=f"download_{file_name}"
+                    )
+
+                # Send CSV backup email
+                send_email_backup(service, file_path)
+
+            except Exception as e:
+                st.error(f"⚠️ CSV save or backup email failed: {e}")
+
+        else:  # Draft mode summary
             st.success(f"📝 Saved {sent_count} draft(s) to Gmail Drafts.")
-        else:
-            st.success(f"✅ Successfully processed {sent_count} emails.")
 
         if skipped:
             st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
         if errors:
             st.error(f"❌ Failed to process {len(errors)}: {errors}")
-
-        # ========================================
-        # Hybrid Backup
-        # ========================================
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-        file_name = f"Updated_{safe_label}_{timestamp}.csv"
-        file_path = os.path.join("/tmp", file_name)
-
-        df.to_csv(file_path, index=False)
-        st.session_state["last_saved_csv"] = file_path
-        st.session_state["last_saved_name"] = file_name
-        st.success("✅ Updated data auto-saved safely on server (backup).")
-
-        st.download_button(
-            "⬇️ Download Updated CSV",
-            data=open(file_path, "rb"),
-            file_name=file_name,
-            mime="text/csv",
-        )
-
-        send_email_backup(service, file_path)
