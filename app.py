@@ -1,4 +1,3 @@
-# app.py (Fixed Persistent Version)
 import streamlit as st
 import pandas as pd
 import base64
@@ -260,7 +259,6 @@ if st.session_state["sending"]:
     progress = st.progress(0)
     status_box = st.empty()
 
-    # persist start info to disk
     with open("/tmp/mailmerge_running.json", "w") as f:
         json.dump({"start": str(datetime.now()), "total": len(df)}, f)
 
@@ -274,10 +272,16 @@ if st.session_state["sending"]:
         df["RfcMessageId"] = None
 
     total = len(df)
+    if total == 0:
+        st.error("❌ No rows found in uploaded file.")
+        st.stop()
+
     sent_count, skipped, errors = 0, [], []
 
     for idx, row in df.iterrows():
-        pct = int((idx / total) * 100)
+        # ✅ Fixed progress bar range
+        pct = int(((idx + 1) / total) * 100)
+        pct = min(max(pct, 0), 100)
         progress.progress(pct)
         status_box.info(f"Processing {idx + 1}/{total}")
 
@@ -336,6 +340,7 @@ if st.session_state["sending"]:
             errors.append((to_addr, str(e)))
             st.error(f"Error for {to_addr}: {e}")
 
+    # ✅ Safely finish progress
     progress.progress(100)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -349,7 +354,6 @@ if st.session_state["sending"]:
     except Exception as e:
         st.warning(f"Backup email failed: {e}")
 
-    # mark done persistently
     with open(DONE_FILE, "w") as f:
         json.dump({"done_time": str(datetime.now()), "file": file_path}, f)
     if os.path.exists("/tmp/mailmerge_running.json"):
