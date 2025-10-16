@@ -5,6 +5,7 @@ import time
 import re
 import json
 import random
+import hashlib
 from datetime import datetime, timedelta
 import pytz
 from email.mime.text import MIMEText
@@ -39,7 +40,7 @@ CLIENT_CONFIG = {
 }
 
 # ========================================
-# Smart Email Extractor
+# Email Regex Extractor
 # ========================================
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
 
@@ -66,13 +67,12 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
         }
         created_label = service.users().labels().create(userId="me", body=label_obj).execute()
         return created_label["id"]
-
     except Exception as e:
         st.warning(f"Could not get/create label: {e}")
         return None
 
 # ========================================
-# Bold + Link Converter (Verdana)
+# Bold + Link Converter
 # ========================================
 def convert_bold(text):
     if not text:
@@ -93,7 +93,7 @@ def convert_bold(text):
     """
 
 # ========================================
-# OAuth Flow
+# OAuth Setup
 # ========================================
 if "creds" not in st.session_state:
     st.session_state["creds"] = None
@@ -122,9 +122,21 @@ else:
         )
         st.stop()
 
-# Build Gmail API client
+# Gmail API client
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 service = build("gmail", "v1", credentials=creds)
+
+# ========================================
+# Restart Guard (internal only)
+# ========================================
+if "sending" not in st.session_state:
+    st.session_state["sending"] = False
+if "processed_hashes" not in st.session_state:
+    st.session_state["processed_hashes"] = set()
+
+def df_sha256_hash(df):
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    return hashlib.sha256(csv_bytes).hexdigest()
 
 # ========================================
 # Upload Recipients
@@ -139,10 +151,10 @@ if uploaded_file:
         df = pd.read_csv(uploaded_file)
     else:
         df = pd.read_excel(uploaded_file)
-
     st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
     st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
+    df_hash = df_sha256_hash(df)
 
     # ========================================
     # Email Template
@@ -176,7 +188,6 @@ Thanks,
             preview_body = body_template.format(**preview_row)
             preview_html = convert_bold(preview_body)
 
-            # Subject line preview in Verdana
             st.markdown(
                 f'<span style="font-family: Verdana, sans-serif; font-size:16px;"><b>Subject:</b> {preview_subject}</span>',
                 unsafe_allow_html=True
@@ -187,203 +198,149 @@ Thanks,
             st.error(f"⚠️ Missing column in data: {e}")
 
     # ========================================
-    # Label & Timing Options
+    # Label & Delay
     # ========================================
     st.header("🏷️ Label & Timing Options")
     label_name = st.text_input("Gmail label to apply (new emails only)", value="Mail Merge Sent")
-
-    delay = st.slider(
-        "Delay between emails (seconds)",
-        min_value=20,
-        max_value=75,
-        value=20,
-        step=1,
-        help="Minimum 20 seconds delay required for safe Gmail sending. Applies to New, Follow-up, and Draft modes."
-    )
+    delay = st.slider("Delay between emails (seconds)", 20, 75, 25, 1)
 
     # ========================================
-    # ✅ "Ready to Send" Button + ETA (All Modes)
+    # ETA Calculation
     # ========================================
-    eta_ready = st.button("🕒 Ready to Send / Calculate ETA")
-
-    if eta_ready:
+    if st.button("🕒 Ready to Send / Calculate ETA"):
         try:
             total_contacts = len(df)
-            avg_delay = delay
-            total_seconds = total_contacts * avg_delay
+            total_seconds = total_contacts * delay
             total_minutes = total_seconds / 60
-
-            # Local timezone
-            local_tz = pytz.timezone("Asia/Kolkata")  # change if needed
-            now_local = datetime.now(local_tz)
-            eta_start = now_local
-            eta_end = now_local + timedelta(seconds=total_seconds)
-
-            eta_start_str = eta_start.strftime("%I:%M %p")
-            eta_end_str = eta_end.strftime("%I:%M %p")
-
+            tz = pytz.timezone("Asia/Kolkata")
+            now = datetime.now(tz)
+            eta_end = now + timedelta(seconds=total_seconds)
             st.success(
-                f"📋 Total Recipients: {total_contacts}\n\n"
-                f"⏳ Estimated Duration: {total_minutes:.1f} min (±10%)\n\n"
-                f"🕒 ETA Window: **{eta_start_str} – {eta_end_str}** (Local Time)\n\n"
-                f"✅ Applies to all send modes: New, Follow-up, Draft"
+                f"📋 Total: {total_contacts} contacts\n\n"
+                f"⏳ Estimated Duration: {total_minutes:.1f} min\n\n"
+                f"🕒 ETA Window: {now.strftime('%I:%M %p')} – {eta_end.strftime('%I:%M %p')}"
             )
         except Exception as e:
-            st.warning(f"ETA calculation failed: {e}")
+            st.warning(f"ETA calc failed: {e}")
 
     # ========================================
-    # Send Mode (with Save Draft)
+    # Send Mode
     # ========================================
-    send_mode = st.radio(
-        "Choose sending mode",
-        ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"]
-    )
+    send_mode = st.radio("Choose sending mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
     # ========================================
-    # Main Send/Draft Button
+    # Send Button
     # ========================================
     if st.button("🚀 Send Emails / Save Drafts"):
-        label_id = get_or_create_label(service, label_name)
-        sent_count = 0
-        skipped, errors = [], []
-
-        with st.spinner("📨 Processing emails... please wait."):
-            if "ThreadId" not in df.columns:
-                df["ThreadId"] = None
-            if "RfcMessageId" not in df.columns:
-                df["RfcMessageId"] = None
-
-            for idx, row in df.iterrows():
-                to_addr = extract_email(str(row.get("Email", "")).strip())
-                if not to_addr:
-                    skipped.append(row.get("Email"))
-                    continue
-
-                try:
-                    subject = subject_template.format(**row)
-                    body_html = convert_bold(body_template.format(**row))
-                    message = MIMEText(body_html, "html")
-                    message["To"] = to_addr
-                    message["Subject"] = subject
-
-                    msg_body = {}
-
-                    # ===== Follow-up (Reply) mode =====
-                    if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row and "RfcMessageId" in row:
-                        thread_id = str(row["ThreadId"]).strip()
-                        rfc_id = str(row["RfcMessageId"]).strip()
-
-                        if thread_id and thread_id.lower() != "nan" and rfc_id:
-                            message["In-Reply-To"] = rfc_id
-                            message["References"] = rfc_id
-                            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                            msg_body = {"raw": raw, "threadId": thread_id}
-                        else:
-                            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                            msg_body = {"raw": raw}
-                    else:
-                        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                        msg_body = {"raw": raw}
-
-                    # ===============================
-                    # ✉️ Send or Save as Draft
-                    # ===============================
-                    if send_mode == "💾 Save as Draft":
-                        draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                        sent_msg = draft.get("message", {})
-                        st.info(f"📝 Draft saved for {to_addr}")
-                    else:
-                        sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-
-                    # 🕒 Delay between operations
-                    if delay > 0:
-                        time.sleep(random.uniform(delay * 0.9, delay * 1.1))
-
-                    # ✅ RFC Message-ID Fetch
-                    message_id_header = None
-                    for attempt in range(5):
-                        time.sleep(random.uniform(2, 4))
-                        try:
-                            msg_detail = service.users().messages().get(
-                                userId="me",
-                                id=sent_msg.get("id", ""),
-                                format="metadata",
-                                metadataHeaders=["Message-ID"],
-                            ).execute()
-
-                            headers = msg_detail.get("payload", {}).get("headers", [])
-                            for h in headers:
-                                if h.get("name", "").lower() == "message-id":
-                                    message_id_header = h.get("value")
-                                    break
-                            if message_id_header:
-                                break
-                        except Exception:
-                            continue
-
-                    # 🏷️ Apply label to new emails
-                    if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
-                        success = False
-                        for attempt in range(3):
-                            try:
-                                service.users().messages().modify(
-                                    userId="me",
-                                    id=sent_msg["id"],
-                                    body={"addLabelIds": [label_id]},
-                                ).execute()
-                                success = True
-                                break
-                            except Exception:
-                                time.sleep(1)
-                        if not success:
-                            st.warning(f"⚠️ Could not apply label to {to_addr}")
-
-                    df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
-                    df.loc[idx, "RfcMessageId"] = message_id_header or ""
-
-                    sent_count += 1
-
-                except Exception as e:
-                    errors.append((to_addr, str(e)))
-
-        # ========================================
-        # Summary
-        # ========================================
-        if send_mode == "💾 Save as Draft":
-            st.success(f"📝 Saved {sent_count} draft(s) to your Gmail Drafts folder.")
+        if st.session_state["sending"]:
+            st.warning("⚠️ A send operation is already in progress. Please wait.")
+        elif df_hash in st.session_state["processed_hashes"]:
+            st.warning("⚠️ This list was already processed. Upload a new or edited file to re-run.")
         else:
-            st.success(f"✅ Successfully processed {sent_count} emails.")
+            st.session_state["sending"] = True
+            try:
+                label_id = get_or_create_label(service, label_name)
+                sent_count, skipped, errors = 0, [], []
+                if "ThreadId" not in df.columns:
+                    df["ThreadId"] = None
+                if "RfcMessageId" not in df.columns:
+                    df["RfcMessageId"] = None
 
-        if skipped:
-            st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
-        if errors:
-            st.error(f"❌ Failed to process {len(errors)}: {errors}")
+                with st.spinner("📨 Sending emails... please wait."):
+                    for idx, row in df.iterrows():
+                        to_addr = extract_email(str(row.get("Email", "")).strip())
+                        if not to_addr:
+                            skipped.append(row.get("Email"))
+                            continue
+                        try:
+                            subject = subject_template.format(**row)
+                            body_html = convert_bold(body_template.format(**row))
+                            message = MIMEText(body_html, "html")
+                            message["To"] = to_addr
+                            message["Subject"] = subject
 
-        # ========================================
-        # CSV Download only for New Email mode
-        # ========================================
-        if send_mode == "🆕 New Email":
-            csv = df.to_csv(index=False).encode("utf-8")
-            safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-            file_name = f"{safe_label}.csv"
+                            msg_body = {}
+                            if send_mode == "↩️ Follow-up (Reply)" and row.get("ThreadId") and row.get("RfcMessageId"):
+                                thread_id = str(row["ThreadId"]).strip()
+                                rfc_id = str(row["RfcMessageId"]).strip()
+                                message["In-Reply-To"] = rfc_id
+                                message["References"] = rfc_id
+                                raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                                msg_body = {"raw": raw, "threadId": thread_id}
+                            else:
+                                raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                                msg_body = {"raw": raw}
 
-            # Visible download button
-            st.download_button(
-                "⬇️ Download Updated CSV (Click if not auto-downloaded)",
-                csv,
-                file_name,
-                "text/csv",
-                key="manual_download"
-            )
+                            if send_mode == "💾 Save as Draft":
+                                draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
+                                sent_msg = draft.get("message", {})
+                            else:
+                                sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-            # Auto-download via hidden link
-            b64 = base64.b64encode(csv).decode()
-            st.markdown(
-                f'''
-                <a id="auto-download-link" href="data:file/csv;base64,{b64}" download="{file_name}"></a>
-                <script>
-                    document.getElementById("auto-download-link").click();
-                </script>
-                ''',
-                unsafe_allow_html=True
-            )
+                            if delay > 0:
+                                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
+
+                            msg_id = None
+                            for _ in range(5):
+                                time.sleep(random.uniform(2, 4))
+                                try:
+                                    md = service.users().messages().get(
+                                        userId="me", id=sent_msg.get("id", ""), format="metadata",
+                                        metadataHeaders=["Message-ID"]
+                                    ).execute()
+                                    for h in md.get("payload", {}).get("headers", []):
+                                        if h.get("name", "").lower() == "message-id":
+                                            msg_id = h.get("value")
+                                            break
+                                    if msg_id:
+                                        break
+                                except Exception:
+                                    continue
+
+                            if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
+                                try:
+                                    service.users().messages().modify(
+                                        userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                                    ).execute()
+                                except Exception:
+                                    pass
+
+                            df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
+                            df.loc[idx, "RfcMessageId"] = msg_id or ""
+                            sent_count += 1
+                        except Exception as e:
+                            errors.append((to_addr, str(e)))
+
+                if send_mode == "💾 Save as Draft":
+                    st.success(f"📝 Saved {sent_count} draft(s).")
+                else:
+                    st.success(f"✅ Successfully processed {sent_count} emails.")
+                if skipped:
+                    st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
+                if errors:
+                    st.error(f"❌ Failed: {errors}")
+
+                # ========================================
+                # CSV download for ALL modes (same UI)
+                # ========================================
+                csv = df.to_csv(index=False).encode("utf-8")
+                safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+                file_name = f"{safe_label}.csv"
+
+                st.download_button(
+                    "⬇️ Download Updated CSV (Click if not auto-downloaded)",
+                    csv, file_name, "text/csv", key="manual_download"
+                )
+
+                b64 = base64.b64encode(csv).decode()
+                st.markdown(
+                    f'''
+                    <a id="auto-download-link" href="data:file/csv;base64,{b64}" download="{file_name}"></a>
+                    <script>document.getElementById("auto-download-link").click();</script>
+                    ''',
+                    unsafe_allow_html=True
+                )
+
+                st.session_state["processed_hashes"].add(df_hash)
+            finally:
+                st.session_state["sending"] = False
