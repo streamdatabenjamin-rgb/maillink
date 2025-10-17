@@ -1,4 +1,4 @@
-#auto download removed 
+#auto CSV download removed 
 import streamlit as st
 import pandas as pd
 import base64
