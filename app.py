@@ -1,4 +1,4 @@
-#auto CSV download removed (file format error fixed)
+#auto CSV download removed 
 import streamlit as st
 import pandas as pd
 import base64
@@ -136,14 +136,25 @@ st.info("⚠️ Upload maximum of **70–80 contacts** for smooth operation and 
 uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
 if uploaded_file:
-    # ✅ Fix for UnicodeDecodeError — handles non-UTF8 CSVs
+    # ✅ Robust CSV/Excel reading with multiple fallbacks
     if uploaded_file.name.endswith("csv"):
         try:
             df = pd.read_csv(uploaded_file, encoding="utf-8")
         except UnicodeDecodeError:
+            uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, encoding="ISO-8859-1")
+        except pd.errors.EmptyDataError:
+            st.error("❌ Uploaded CSV appears empty or corrupted. Please check the file.")
+            st.stop()
+        except pd.errors.ParserError:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep=None, engine="python")
     else:
-        df = pd.read_excel(uploaded_file)
+        try:
+            df = pd.read_excel(uploaded_file)
+        except Exception:
+            st.error("❌ Unable to read Excel file. Please verify the format.")
+            st.stop()
 
     st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
@@ -206,7 +217,7 @@ Thanks,
     )
 
     # ========================================
-    # ✅ "Ready to Send" Button + ETA (All Modes)
+    # ✅ "Ready to Send" Button + ETA
     # ========================================
     eta_ready = st.button("🕒 Ready to Send / Calculate ETA")
 
@@ -219,14 +230,12 @@ Thanks,
 
             local_tz = pytz.timezone("Asia/Kolkata")
             now_local = datetime.now(local_tz)
-            eta_start = now_local
             eta_end = now_local + timedelta(seconds=total_seconds)
 
             st.success(
                 f"📋 Total Recipients: {total_contacts}\n\n"
                 f"⏳ Estimated Duration: {total_minutes:.1f} min (±10%)\n\n"
-                f"🕒 ETA Window: **{eta_start.strftime('%I:%M %p')} – {eta_end.strftime('%I:%M %p')}** (Local Time)\n\n"
-                f"✅ Applies to all send modes: New, Follow-up, Draft"
+                f"🕒 ETA Window: **{now_local.strftime('%I:%M %p')} – {eta_end.strftime('%I:%M %p')}** (Local Time)"
             )
         except Exception as e:
             st.warning(f"ETA calculation failed: {e}")
@@ -286,9 +295,7 @@ Thanks,
                         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                         msg_body = {"raw": raw}
 
-                    # ===============================
                     # ✉️ Send or Save as Draft
-                    # ===============================
                     if send_mode == "💾 Save as Draft":
                         draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
                         sent_msg = draft.get("message", {})
@@ -296,11 +303,10 @@ Thanks,
                     else:
                         sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-                    # 🕒 Delay
                     if delay > 0:
                         time.sleep(random.uniform(delay * 0.9, delay * 1.1))
 
-                    # ✅ RFC Message-ID
+                    # ✅ RFC Message-ID Fetch
                     message_id_header = None
                     for attempt in range(5):
                         time.sleep(random.uniform(2, 4))
@@ -311,7 +317,6 @@ Thanks,
                                 format="metadata",
                                 metadataHeaders=["Message-ID"],
                             ).execute()
-
                             headers = msg_detail.get("payload", {}).get("headers", [])
                             for h in headers:
                                 if h.get("name", "").lower() == "message-id":
@@ -322,7 +327,7 @@ Thanks,
                         except Exception:
                             continue
 
-                    # 🏷️ Apply label to new emails
+                    # 🏷️ Apply label
                     if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
                         for attempt in range(3):
                             try:
