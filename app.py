@@ -1,11 +1,10 @@
-#auto CSV download removed 
+# auto CSV download removed
 import streamlit as st
 import pandas as pd
 import base64
 import time
 import re
 import json
-import random
 from datetime import datetime, timedelta
 import pytz
 from email.mime.text import MIMEText
@@ -40,7 +39,7 @@ CLIENT_CONFIG = {
 }
 
 # ========================================
-# Smart Email Extractor
+# Email Extractor
 # ========================================
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
 
@@ -177,7 +176,6 @@ Thanks,
             preview_body = body_template.format(**preview_row)
             preview_html = convert_bold(preview_body)
 
-            # Subject line preview in Verdana
             st.markdown(
                 f'<span style="font-family: Verdana, sans-serif; font-size:16px;"><b>Subject:</b> {preview_subject}</span>',
                 unsafe_allow_html=True
@@ -203,7 +201,7 @@ Thanks,
     )
 
     # ========================================
-    # ✅ "Ready to Send" Button + ETA (All Modes)
+    # ✅ "Ready to Send" Button + ETA
     # ========================================
     eta_ready = st.button("🕒 Ready to Send / Calculate ETA")
 
@@ -214,8 +212,7 @@ Thanks,
             total_seconds = total_contacts * avg_delay
             total_minutes = total_seconds / 60
 
-            # Local timezone
-            local_tz = pytz.timezone("Asia/Kolkata")  # change if needed
+            local_tz = pytz.timezone("Asia/Kolkata")
             now_local = datetime.now(local_tz)
             eta_start = now_local
             eta_end = now_local + timedelta(seconds=total_seconds)
@@ -233,7 +230,7 @@ Thanks,
             st.warning(f"ETA calculation failed: {e}")
 
     # ========================================
-    # Send Mode (with Save Draft)
+    # Send Mode
     # ========================================
     send_mode = st.radio(
         "Choose sending mode",
@@ -241,139 +238,65 @@ Thanks,
     )
 
     # ========================================
-    # Main Send/Draft Button
+    # Main Send/Draft Button with Visual Progress
     # ========================================
     if st.button("🚀 Send Emails / Save Drafts"):
         label_id = get_or_create_label(service, label_name)
         sent_count = 0
         skipped, errors = [], []
 
-        with st.spinner("📨 Processing emails... please wait."):
+        if "ThreadId" not in df.columns:
+            df["ThreadId"] = None
+        if "RfcMessageId" not in df.columns:
+            df["RfcMessageId"] = None
 
-            if "ThreadId" not in df.columns:
-                df["ThreadId"] = None
-            if "RfcMessageId" not in df.columns:
-                df["RfcMessageId"] = None
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        total_contacts = len(df)
 
-            for idx, row in df.iterrows():
-                to_addr = extract_email(str(row.get("Email", "")).strip())
-                if not to_addr:
-                    skipped.append(row.get("Email"))
-                    continue
-
+        for idx, row in df.iterrows():
+            to_addr = extract_email(str(row.get("Email", "")).strip())
+            if not to_addr:
+                skipped.append(row.get("Email"))
+            else:
                 try:
                     subject = subject_template.format(**row)
                     body_html = convert_bold(body_template.format(**row))
+
                     message = MIMEText(body_html, "html")
-                    message["To"] = to_addr
-                    message["Subject"] = subject
+                    message["to"] = to_addr
+                    message["subject"] = subject
+                    raw_message = {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}
 
-                    msg_body = {}
+                    # Send according to mode
+                    if send_mode == "🆕 New Email":
+                        sent_msg = service.users().messages().send(userId="me", body=raw_message).execute()
+                    elif send_mode == "💾 Save as Draft":
+                        draft = service.users().drafts().create(userId="me", body={"message": raw_message}).execute()
+                    elif send_mode == "↩️ Follow-up (Reply)":
+                        thread_id = row.get("ThreadId")
+                        if thread_id:
+                            raw_message["threadId"] = thread_id
+                        sent_msg = service.users().messages().send(userId="me", body=raw_message).execute()
 
-                    # ===== Follow-up (Reply) mode =====
-                    if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row and "RfcMessageId" in row:
-                        thread_id = str(row["ThreadId"]).strip()
-                        rfc_id = str(row["RfcMessageId"]).strip()
-
-                        if thread_id and thread_id.lower() != "nan" and rfc_id:
-                            message["In-Reply-To"] = rfc_id
-                            message["References"] = rfc_id
-                            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                            msg_body = {"raw": raw, "threadId": thread_id}
-                        else:
-                            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                            msg_body = {"raw": raw}
-                    else:
-                        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                        msg_body = {"raw": raw}
-
-                    # ===============================
-                    # ✉️ Send or Save as Draft
-                    # ===============================
-                    if send_mode == "💾 Save as Draft":
-                        draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                        sent_msg = draft.get("message", {})
-                        st.info(f"📝 Draft saved for {to_addr}")
-                    else:
-                        sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-
-                    # 🕒 Delay between operations
-                    if delay > 0:
-                        time.sleep(random.uniform(delay * 0.9, delay * 1.1))
-
-                    # ✅ RFC Message-ID Fetch
-                    message_id_header = None
-                    for attempt in range(5):
-                        time.sleep(random.uniform(2, 4))
-                        try:
-                            msg_detail = service.users().messages().get(
-                                userId="me",
-                                id=sent_msg.get("id", ""),
-                                format="metadata",
-                                metadataHeaders=["Message-ID"],
-                            ).execute()
-
-                            headers = msg_detail.get("payload", {}).get("headers", [])
-                            for h in headers:
-                                if h.get("name", "").lower() == "message-id":
-                                    message_id_header = h.get("value")
-                                    break
-                            if message_id_header:
-                                break
-                        except Exception:
-                            continue
-
-                    # 🏷️ Apply label to new emails
-                    if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
-                        success = False
-                        for attempt in range(3):
-                            try:
-                                service.users().messages().modify(
-                                    userId="me",
-                                    id=sent_msg["id"],
-                                    body={"addLabelIds": [label_id]},
-                                ).execute()
-                                success = True
-                                break
-                            except Exception:
-                                time.sleep(1)
-                        if not success:
-                            st.warning(f"⚠️ Could not apply label to {to_addr}")
-
-                    df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
-                    df.loc[idx, "RfcMessageId"] = message_id_header or ""
+                    # Apply label if new email
+                    if label_id and send_mode != "💾 Save as Draft":
+                        service.users().messages().modify(
+                            userId="me",
+                            id=sent_msg["id"],
+                            body={"addLabelIds": [label_id]}
+                        ).execute()
 
                     sent_count += 1
 
                 except Exception as e:
                     errors.append((to_addr, str(e)))
 
-        # ========================================
-        # Summary
-        # ========================================
-        if send_mode == "💾 Save as Draft":
-            st.success(f"📝 Saved {sent_count} draft(s) to your Gmail Drafts folder.")
-        else:
-            st.success(f"✅ Successfully processed {sent_count} emails.")
-
-        if skipped:
-            st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
-        if errors:
-            st.error(f"❌ Failed to process {len(errors)}: {errors}")
-
-        # ========================================
-        # CSV Download only for New Email mode
-        # ========================================
-        if send_mode == "🆕 New Email":
-            csv = df.to_csv(index=False).encode("utf-8")
-            safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-            file_name = f"{safe_label}.csv"
-
-            # Visible download button
-            st.download_button(
-                "⬇️ Download Updated CSV (Click if not auto-downloaded)",
-                csv,
-                file_name,
-                "text/csv",
-                key="manual_download"
+            # Update visual progress
+            progress_bar.progress((idx + 1) / total_contacts)
+            status_text.text(
+                f"{idx + 1} of {total_contacts} | Sent: {sent_count} | Skipped: {len(skipped)} | Errors: {len(errors)}"
             )
+            time.sleep(delay)
+
+        st.success(f"✅ Done! Sent: {sent_count}, Skipped: {len(skipped)}, Errors: {len(errors)}")
