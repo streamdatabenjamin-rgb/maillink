@@ -1,4 +1,4 @@
-#auto CSV download removed 
+#auto CSV download removed + file format upload error fixed
 import streamlit as st
 import pandas as pd
 import base64
@@ -370,7 +370,7 @@ Thanks,
             file_name = f"{safe_label}.csv"
 
             st.download_button(
-                "⬇️ Download Updated CSV (Click if not auto-downloaded)",
+                "⬇️ Download Updated CSV ",
                 csv,
                 file_name,
                 "text/csv",
