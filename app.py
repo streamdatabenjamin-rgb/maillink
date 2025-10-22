@@ -1,5 +1,5 @@
 # ========================================
-# Gmail Mail Merge with Visual Progress Bar + Persistent CSV Download
+# Gmail Mail Merge Tool - Multi-Tasking Safe Version
 # ========================================
 import streamlit as st
 import pandas as pd
@@ -19,7 +19,7 @@ from googleapiclient.discovery import build
 # Streamlit Page Setup
 # ========================================
 st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
-st.title("📧 Gmail Mail Merge Tool (with Follow-up Replies + Draft Save)")
+st.title("📧 Gmail Mail Merge Tool (Multi-tasking Safe Version)")
 
 # ========================================
 # Gmail API Setup
@@ -42,7 +42,6 @@ CLIENT_CONFIG = {
 }
 
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
-
 
 def extract_email(value: str):
     if not value:
@@ -95,7 +94,9 @@ if "creds" not in st.session_state:
     st.session_state["creds"] = None
 
 if st.session_state["creds"]:
-    creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
+    creds = Credentials.from_authorized_user_info(
+        json.loads(st.session_state["creds"]), SCOPES
+    )
 else:
     code = st.experimental_get_query_params().get("code", None)
     if code:
@@ -111,7 +112,9 @@ else:
         auth_url, _ = flow.authorization_url(
             prompt="consent", access_type="offline", include_granted_scopes="true"
         )
-        st.markdown(f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account.")
+        st.markdown(
+            f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account."
+        )
         st.stop()
 
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
@@ -177,7 +180,7 @@ Thanks,
 
             st.markdown(
                 f'<span style="font-family: Verdana, sans-serif; font-size:16px;"><b>Subject:</b> {preview_subject}</span>',
-                unsafe_allow_html=True,
+                unsafe_allow_html=True
             )
             st.markdown("---")
             st.markdown(preview_html, unsafe_allow_html=True)
@@ -193,7 +196,7 @@ Thanks,
         max_value=75,
         value=20,
         step=1,
-        help="Minimum 20 seconds delay required for safe Gmail sending.",
+        help="Minimum 20 seconds delay required for safe Gmail sending."
     )
 
     eta_ready = st.button("🕒 Ready to Send / Calculate ETA")
@@ -214,11 +217,11 @@ Thanks,
         except Exception as e:
             st.warning(f"ETA calculation failed: {e}")
 
-    send_mode = st.radio("Choose sending mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
+    send_mode = st.radio(
+        "Choose sending mode",
+        ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"]
+    )
 
-    # ========================================
-    # Send Button Logic
-    # ========================================
     if st.button("🚀 Send Emails / Save Drafts"):
         label_id = get_or_create_label(service, label_name)
         sent_count = 0
@@ -273,7 +276,6 @@ Thanks,
                     if delay > 0:
                         time.sleep(random.uniform(delay * 0.9, delay * 1.1))
 
-                    # Fetch Message-ID
                     message_id_header = None
                     for attempt in range(3):
                         try:
@@ -296,17 +298,20 @@ Thanks,
 
                     if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
                         service.users().messages().modify(
-                            userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                            userId="me",
+                            id=sent_msg["id"],
+                            body={"addLabelIds": [label_id]},
                         ).execute()
 
                     df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
                     df.loc[idx, "RfcMessageId"] = message_id_header or ""
+
                     sent_count += 1
 
                 except Exception as e:
                     errors.append((to_addr, str(e)))
 
-                # Progress bar update
+                # 🔵 Update progress bar + status live
                 progress = int((idx + 1) / total * 100)
                 progress_bar.progress(progress)
                 status_text.text(
@@ -314,38 +319,33 @@ Thanks,
                 )
 
         # ========================================
-        # Summary + Save State
+        # Persist Results in Session for Multi-tasking
         # ========================================
-        st.markdown("### ✅ Summary")
-        if send_mode == "💾 Save as Draft":
-            st.success(f"📝 Saved {sent_count} draft(s).")
-        else:
-            st.success(f"✅ Successfully processed {sent_count} emails.")
+        st.session_state["final_df"] = df
+        st.session_state["process_done"] = True
+
+        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+        file_name = f"{safe_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.session_state["csv_data"] = csv
+        st.session_state["csv_filename"] = file_name
+
+        st.success(f"✅ Completed sending {sent_count} emails.")
         if skipped:
             st.warning(f"⚠️ Skipped {len(skipped)} invalid emails.")
         if errors:
-            st.error(f"❌ Failed to process {len(errors)} emails.")
-
-        # Save for download after rerun
-        st.session_state["updated_df"] = df
-        st.session_state["label_name"] = label_name
-
-        st.success("✅ Process completed! The page will refresh in 10 seconds to enable CSV download.")
-        st.balloons()
-        time.sleep(10)
-        st.experimental_rerun()
+            st.error(f"❌ Failed {len(errors)} emails.")
+        st.info("⬇️ You can download the updated CSV anytime below.")
 
 # ========================================
-# Persistent Download Button
+# Persistent Download (multi-tasking safe)
 # ========================================
-if "updated_df" in st.session_state and not st.session_state["updated_df"].empty:
-    csv = st.session_state["updated_df"].to_csv(index=False).encode("utf-8")
-    safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", st.session_state["label_name"])
-    file_name = f"{safe_label}.csv"
+if st.session_state.get("process_done", False):
+    st.markdown("---")
     st.download_button(
         "⬇️ Download Updated CSV",
-        csv,
-        file_name,
+        st.session_state["csv_data"],
+        st.session_state["csv_filename"],
         "text/csv",
-        key="manual_download_persistent",
+        key="manual_download_final"
     )
