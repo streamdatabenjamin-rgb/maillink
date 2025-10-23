@@ -249,7 +249,6 @@ if st.session_state["sending"]:
     sent_count, skipped, errors = 0, [], []
 
     def send_one(idx, row):
-        nonlocal sent_count
         to_addr = extract_email(str(row.get("Email", "")).strip())
         if not to_addr:
             df.loc[idx, "Status"] = "Skipped"
@@ -286,6 +285,54 @@ if st.session_state["sending"]:
                 if status == "Sent":
                     sent_count += 1
             except Exception as e:
+                errors.append((idx, str(e)))
+            status_box.info(f"Processed {i + 1}/{total}")
+
+    # Save CSV
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+    file_name = f"Updated_{safe_label}_{timestamp}.csv"
+    file_path = os.path.join(tempfile.gettempdir(), file_name)
+    df.to_csv(file_path, index=False, encoding='utf-8-sig')
+
+    try:
+        send_email_backup(service, file_path)
+    except Exception as e:
+        st.warning(f"Backup email failed: {e}")
+
+    with open(DONE_FILE, "w") as f:
+        json.dump({"done_time": str(datetime.now()), "file": file_path}, f)
+
+    st.session_state["sending"] = False
+    st.session_state["done"] = True
+    st.session_state["summary"] = {"sent": sent_count, "errors": errors, "skipped": skipped}
+    st.rerun()
+
+# ========================================
+# Completion
+# ========================================
+if st.session_state["done"]:
+    summary = st.session_state.get("summary", {})
+    st.success(f"✅ Process completed. Sent: {summary.get('sent', 0)}")
+    if summary.get("errors"):
+        st.error(f"❌ {len(summary['errors'])} errors occurred.")
+    if summary.get("skipped"):
+        st.warning(f"⚠️ Skipped some invalid emails.")
+    with open(DONE_FILE, "r") as f:
+        done_info = json.load(f)
+    file_path = done_info.get("file")
+    if file_path and os.path.exists(file_path):
+        st.download_button(
+            "⬇️ Download Updated CSV",
+            data=open(file_path, "rb"),
+            file_name=os.path.basename(file_path),
+            mime="text/csv",
+        )
+    if st.button("🔁 New Run / Reset"):
+        if os.path.exists(DONE_FILE):
+            os.remove(DONE_FILE)
+        st.session_state.clear()
+        st.experimental_rerun()except Exception as e:
                 errors.append((idx, str(e)))
             status_box.info(f"Processed {i + 1}/{total}")
 
