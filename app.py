@@ -221,6 +221,23 @@ Thanks,
 **Your Company**""",
             height=250,
         )
+
+        # --- Template Preview (added without changing any feature/UI) ---
+        st.markdown("### 🪄 Template Preview")
+
+        if 'df' in locals() and not df.empty:
+            sample_row = df.iloc[0].to_dict()
+            try:
+                preview_subject = subject_template.format(**sample_row)
+                preview_body = convert_bold(body_template.format(**sample_row))
+                with st.expander("📄 Preview using first row", expanded=True):
+                    st.markdown(f"**Subject:** {preview_subject}")
+                    st.markdown(preview_body, unsafe_allow_html=True)
+            except Exception as e:
+                st.warning(f"⚠️ Unable to preview template — missing or invalid placeholders: {e}")
+        else:
+            st.info("📋 Upload a CSV/Excel file and edit the body to see a live preview here.")
+
         label_name = st.text_input("Gmail label", "Mail Merge Sent")
         delay = st.slider("Delay (seconds)", 20, 75, 20)
         send_mode = st.radio("Choose mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
