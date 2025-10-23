@@ -259,7 +259,7 @@ Thanks,
             st.rerun()
 
 # ========================================
-# Sending Mode
+# Sending Mode with Batch Labeling
 # ========================================
 if st.session_state["sending"]:
     df = st.session_state["df"]
@@ -282,6 +282,8 @@ if st.session_state["sending"]:
     sent_count, skipped, errors = 0, [], []
 
     batch_count = 0
+    sent_message_ids = []  # Collect message IDs for batch labeling
+
     for i, idx in enumerate(pending_indices):
         if send_mode != "💾 Save as Draft" and batch_count >= BATCH_SIZE_DEFAULT:
             break
@@ -332,12 +334,8 @@ if st.session_state["sending"]:
                 df.loc[idx, "RfcMessageId"] = fetch_message_id_header(service, msg_id) or msg_id
                 df.loc[idx, "Status"] = "Sent"
                 if send_mode == "🆕 New Email" and label_id:
-                    try:
-                        service.users().messages().modify(
-                            userId="me", id=msg_id, body={"addLabelIds": [label_id]}
-                        ).execute()
-                    except Exception:
-                        pass
+                    sent_message_ids.append(msg_id)  # Add to batch list
+
             sent_count += 1
             batch_count += 1
             if send_mode != "💾 Save as Draft":
@@ -346,6 +344,16 @@ if st.session_state["sending"]:
             df.loc[idx, "Status"] = "Error"
             errors.append((to_addr, str(e)))
             st.error(f"Error for {to_addr}: {e}")
+
+    # Apply batch label at the end
+    if sent_message_ids and label_id:
+        try:
+            service.users().messages().batchModify(
+                userId="me",
+                body={"ids": sent_message_ids, "addLabelIds": [label_id]}
+            ).execute()
+        except Exception as e:
+            st.warning(f"Batch labeling failed: {e}")
 
     progress.progress(100)
 
