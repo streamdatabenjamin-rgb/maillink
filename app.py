@@ -229,7 +229,7 @@ Thanks,
         send_mode = st.radio("Choose mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
         # ---------------------------
-        # Gmail Template Preview
+        # Gmail Template Preview (Below Editor)
         # ---------------------------
         if not df.empty:
             preview_row = df.iloc[0]  # Preview using first row
@@ -245,6 +245,9 @@ Thanks,
             st.markdown(f"**Subject:** {preview_subject}")
             st.markdown(preview_body, unsafe_allow_html=True)
 
+        # ---------------------------
+        # Send Button
+        # ---------------------------
         if st.button("🚀 Send Emails / Save Drafts"):
             st.session_state.update({
                 "sending": True,
