@@ -368,8 +368,4 @@ if st.session_state["done"]:
             file_name=os.path.basename(file_path),
             mime="text/csv",
         )
-    if st.button("🔁 New Run / Reset"):
-        if os.path.exists(DONE_FILE):
-            os.remove(DONE_FILE)
-        st.session_state.clear()
-        st.experimental_rerun()
+    st.info("✅ Mail merge finished. You may restart manually or upload a new CSV to begin again.")
