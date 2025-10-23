@@ -206,7 +206,7 @@ if not st.session_state["sending"]:
         if not pending_rows.empty:
             df = pending_rows.reset_index(drop=True)
 
-        st.dataframe(df.head())
+        # Editable recipient list
         st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
@@ -229,7 +229,7 @@ Thanks,
         send_mode = st.radio("Choose mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
         # ---------------------------
-        # Gmail Template Preview (NEW)
+        # Gmail Template Preview
         # ---------------------------
         if not df.empty:
             preview_row = df.iloc[0]  # Preview using first row
