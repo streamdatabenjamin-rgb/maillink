@@ -323,10 +323,10 @@ if st.session_state["sending"]:
                 msg_body = {"raw": raw}
 
             if send_mode == "💾 Save as Draft":
-                draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                df.loc[idx, "ThreadId"] = draft.get("message", {}).get("threadId", "")
-                df.loc[idx, "RfcMessageId"] = draft.get("message", {}).get("id", "")
+                # Lightweight draft creation
+                service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
                 df.loc[idx, "Status"] = "Draft"
+                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
             else:
                 sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
                 msg_id = sent_msg.get("id", "")
@@ -335,42 +335,39 @@ if st.session_state["sending"]:
                 df.loc[idx, "Status"] = "Sent"
                 if send_mode == "🆕 New Email" and label_id:
                     sent_message_ids.append(msg_id)  # Add to batch list
+                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
 
             sent_count += 1
             batch_count += 1
-            if send_mode != "💾 Save as Draft":
-                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
         except Exception as e:
             df.loc[idx, "Status"] = "Error"
             errors.append((to_addr, str(e)))
             st.error(f"Error for {to_addr}: {e}")
 
-    # Apply batch label at the end
-    if sent_message_ids and label_id:
+    # Apply batch label & CSV backup only for sending modes
+    if send_mode != "💾 Save as Draft":
+        if sent_message_ids and label_id:
+            try:
+                service.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": sent_message_ids, "addLabelIds": [label_id]}
+                ).execute()
+            except Exception as e:
+                st.warning(f"Batch labeling failed: {e}")
+
+        # Save and backup full DataFrame
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+        file_name = f"Updated_{safe_label}_{timestamp}.csv"
+        file_path = os.path.join("/tmp", file_name)
+        df.to_csv(file_path, index=False)
         try:
-            service.users().messages().batchModify(
-                userId="me",
-                body={"ids": sent_message_ids, "addLabelIds": [label_id]}
-            ).execute()
+            send_email_backup(service, file_path)
         except Exception as e:
-            st.warning(f"Batch labeling failed: {e}")
+            st.warning(f"Backup email failed: {e}")
 
-    progress.progress(100)
-
-    # Save and backup full DataFrame
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-    file_name = f"Updated_{safe_label}_{timestamp}.csv"
-    file_path = os.path.join("/tmp", file_name)
-    df.to_csv(file_path, index=False)
-
-    try:
-        send_email_backup(service, file_path)
-    except Exception as e:
-        st.warning(f"Backup email failed: {e}")
-
-    with open(DONE_FILE, "w") as f:
-        json.dump({"done_time": str(datetime.now()), "file": file_path}, f)
+        with open(DONE_FILE, "w") as f:
+            json.dump({"done_time": str(datetime.now()), "file": file_path}, f)
 
     st.session_state["sending"] = False
     st.session_state["done"] = True
@@ -387,16 +384,6 @@ if st.session_state["done"]:
         st.error(f"❌ {len(summary['errors'])} errors occurred.")
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
-    with open(DONE_FILE, "r") as f:
-        done_info = json.load(f)
-    file_path = done_info.get("file")
-    if file_path and os.path.exists(file_path):
-        st.download_button(
-            "⬇️ Download Updated CSV",
-            data=open(file_path, "rb"),
-            file_name=os.path.basename(file_path),
-            mime="text/csv",
-        )
     if st.button("🔁 New Run / Reset"):
         if os.path.exists(DONE_FILE):
             os.remove(DONE_FILE)
