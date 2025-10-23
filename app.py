@@ -196,17 +196,14 @@ if not st.session_state["sending"]:
         else:
             df = pd.read_excel(uploaded_file)
 
-        # Add columns if missing
+        # Add missing columns
         for col in ["ThreadId", "RfcMessageId", "Status"]:
             if col not in df.columns:
                 df[col] = ""
 
-        # Auto resume from first unsent row
-        pending_rows = df[df["Status"] != "Sent"]
-        if not pending_rows.empty:
-            df = pending_rows.reset_index(drop=True)
+        # Keep full DataFrame but get indices of unsent rows
+        pending_indices = df.index[df["Status"] != "Sent"].tolist()
 
-        # Editable recipient list
         st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
@@ -232,7 +229,7 @@ Thanks,
         # Gmail Template Preview (Below Editor)
         # ---------------------------
         if not df.empty:
-            preview_row = df.iloc[0]  # Preview using first row
+            preview_row = df.iloc[0]
             try:
                 preview_subject = subject_template.format(**preview_row)
                 preview_body = convert_bold(body_template.format(**preview_row))
@@ -252,6 +249,7 @@ Thanks,
             st.session_state.update({
                 "sending": True,
                 "df": df,
+                "pending_indices": pending_indices,
                 "subject_template": subject_template,
                 "body_template": body_template,
                 "label_name": label_name,
@@ -265,6 +263,7 @@ Thanks,
 # ========================================
 if st.session_state["sending"]:
     df = st.session_state["df"]
+    pending_indices = st.session_state["pending_indices"]
     subject_template = st.session_state["subject_template"]
     body_template = st.session_state["body_template"]
     label_name = st.session_state["label_name"]
@@ -279,19 +278,18 @@ if st.session_state["sending"]:
     if send_mode == "🆕 New Email":
         label_id = get_or_create_label(service, label_name)
 
-    total = len(df)
+    total = len(pending_indices)
     sent_count, skipped, errors = 0, [], []
 
     batch_count = 0
-    for idx, row in df.iterrows():
+    for i, idx in enumerate(pending_indices):
         if send_mode != "💾 Save as Draft" and batch_count >= BATCH_SIZE_DEFAULT:
             break
-        if row.get("Status") == "Sent":
-            continue
+        row = df.loc[idx]
 
-        pct = int(((idx + 1) / total) * 100)
+        pct = int(((i + 1) / total) * 100)
         progress.progress(min(max(pct, 0), 100))
-        status_box.info(f"Processing {idx + 1}/{total}")
+        status_box.info(f"Processing {i + 1}/{total}")
 
         to_addr = extract_email(str(row.get("Email", "")).strip())
         if not to_addr:
@@ -351,7 +349,7 @@ if st.session_state["sending"]:
 
     progress.progress(100)
 
-    # Save and backup
+    # Save and backup full DataFrame
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
     file_name = f"Updated_{safe_label}_{timestamp}.csv"
