@@ -1,5 +1,5 @@
 # ========================================
-# Gmail Mail Merge Tool - Batch + Resume (Silent Mode)
+# Gmail Mail Merge Tool - Optimized Batch + Resume (Silent Mode)
 # ========================================
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,9 @@ import re
 import json
 import random
 import os
+import tempfile
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -21,7 +23,7 @@ from googleapiclient.discovery import build
 # Streamlit Page Setup
 # ========================================
 st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
-st.title("📧 Gmail Mail Merge Tool (with Follow-up Replies + Draft Save)")
+st.title("📧 Gmail Mail Merge Tool (Optimized Batch + Resume)")
 
 # ========================================
 # Gmail API Setup
@@ -46,8 +48,19 @@ CLIENT_CONFIG = {
 # ========================================
 # Constants
 # ========================================
-DONE_FILE = "/tmp/mailmerge_done.json"
+DONE_FILE = os.path.join(tempfile.gettempdir(), "mailmerge_done.json")
 BATCH_SIZE_DEFAULT = 50
+
+# ========================================
+# Cached Gmail label lookup
+# ========================================
+@st.cache_data(show_spinner=False)
+def cached_labels(service):
+    try:
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        return {l["name"].lower(): l["id"] for l in labels}
+    except Exception:
+        return {}
 
 # ========================================
 # Recovery Logic
@@ -87,10 +100,10 @@ def extract_email(value: str):
 def convert_bold(text):
     if not text:
         return ""
-    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\\1</b>", text)
     text = re.sub(
         r"\[(.*?)\]\((https?://[^\s)]+)\)",
-        r'<a href="\2" style="color:#1a73e8; text-decoration:underline;" target="_blank">\1</a>',
+        r'<a href="\\2" style="color:#1a73e8; text-decoration:underline;" target="_blank">\\1</a>',
         text,
     )
     text = text.replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
@@ -102,15 +115,14 @@ def convert_bold(text):
 
 def get_or_create_label(service, label_name="Mail Merge Sent"):
     try:
-        labels = service.users().labels().list(userId="me").execute().get("labels", [])
-        for label in labels:
-            if label["name"].lower() == label_name.lower():
-                return label["id"]
-        created_label = service.users().labels().create(
+        labels = cached_labels(service)
+        if label_name.lower() in labels:
+            return labels[label_name.lower()]
+        created = service.users().labels().create(
             userId="me",
             body={"name": label_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
         ).execute()
-        return created_label["id"]
+        return created["id"]
     except Exception:
         return None
 
@@ -131,21 +143,6 @@ def send_email_backup(service, csv_path):
         st.info(f"📧 Backup CSV emailed to {user_email}")
     except Exception as e:
         st.warning(f"⚠️ Could not send backup email: {e}")
-
-def fetch_message_id_header(service, message_id):
-    for _ in range(6):
-        try:
-            msg_detail = service.users().messages().get(
-                userId="me", id=message_id, format="metadata", metadataHeaders=["Message-ID"]
-            ).execute()
-            headers = msg_detail.get("payload", {}).get("headers", [])
-            for h in headers:
-                if h.get("name", "").lower() == "message-id":
-                    return h.get("value")
-        except Exception:
-            pass
-        time.sleep(random.uniform(1, 2))
-    return ""
 
 # ========================================
 # OAuth Flow
@@ -187,7 +184,6 @@ if "done" not in st.session_state:
 # ========================================
 if not st.session_state["sending"]:
     st.header("📤 Upload Recipient List")
-    st.info("⚠️ Upload up to **70–80 contacts** for smooth performance.")
     uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
     if uploaded_file:
@@ -196,33 +192,24 @@ if not st.session_state["sending"]:
         else:
             df = pd.read_excel(uploaded_file)
 
-        # Add columns if missing
         for col in ["ThreadId", "RfcMessageId", "Status"]:
             if col not in df.columns:
                 df[col] = ""
 
-        # Auto resume from first unsent row
-        pending_rows = df[df["Status"] != "Sent"]
-        if not pending_rows.empty:
-            df = pending_rows.reset_index(drop=True)
+        pending = df[df["Status"] != "Sent"]
+        if not pending.empty:
+            df = pending.reset_index(drop=True)
 
         st.dataframe(df.head())
-        st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
-        df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-
         subject_template = st.text_input("Subject", "Hello {Name}")
         body_template = st.text_area(
             "Body",
-            """Dear {Name},
-
-Welcome to **Mail Merge App** demo.
-
-Thanks,  
-**Your Company**""",
+            """Dear {Name},\n\nWelcome to **Mail Merge App** demo.\n\nThanks,  \n**Your Company**""",
             height=250,
         )
         label_name = st.text_input("Gmail label", "Mail Merge Sent")
-        delay = st.slider("Delay (seconds)", 20, 75, 20)
+        delay = st.slider("Delay (seconds)", 10, 75, 20)
+        workers = st.slider("Parallel workers", 1, 5, 3)
         send_mode = st.radio("Choose mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
         if st.button("🚀 Send Emails / Save Drafts"):
@@ -233,7 +220,8 @@ Thanks,
                 "body_template": body_template,
                 "label_name": label_name,
                 "delay": delay,
-                "send_mode": send_mode
+                "send_mode": send_mode,
+                "workers": workers,
             })
             st.rerun()
 
@@ -247,6 +235,7 @@ if st.session_state["sending"]:
     label_name = st.session_state["label_name"]
     delay = st.session_state["delay"]
     send_mode = st.session_state["send_mode"]
+    workers = st.session_state["workers"]
 
     st.markdown("<h3>📨 Sending emails... please wait.</h3>", unsafe_allow_html=True)
     progress = st.progress(0)
@@ -259,81 +248,53 @@ if st.session_state["sending"]:
     total = len(df)
     sent_count, skipped, errors = 0, [], []
 
-    batch_count = 0
-    for idx, row in df.iterrows():
-        if send_mode != "💾 Save as Draft" and batch_count >= BATCH_SIZE_DEFAULT:
-            break  # Stop after 50 messages
-        if row.get("Status") == "Sent":
-            continue
-
-        pct = int(((idx + 1) / total) * 100)
-        progress.progress(min(max(pct, 0), 100))
-        status_box.info(f"Processing {idx + 1}/{total}")
-
+    def send_one(idx, row):
+        nonlocal sent_count
         to_addr = extract_email(str(row.get("Email", "")).strip())
         if not to_addr:
-            skipped.append(row.get("Email"))
             df.loc[idx, "Status"] = "Skipped"
-            continue
-
+            return (None, "Skipped", None)
         try:
             subject = subject_template.format(**row)
             body_html = convert_bold(body_template.format(**row))
             message = MIMEText(body_html, "html")
             message["To"] = to_addr
             message["Subject"] = subject
-
-            msg_body = {}
-            if send_mode == "↩️ Follow-up (Reply)":
-                thread_id = str(row.get("ThreadId", "")).strip()
-                rfc_id = str(row.get("RfcMessageId", "")).strip()
-                if thread_id and rfc_id:
-                    message["In-Reply-To"] = rfc_id
-                    message["References"] = rfc_id
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                    msg_body = {"raw": raw, "threadId": thread_id}
-                else:
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                    msg_body = {"raw": raw}
-            else:
-                raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                msg_body = {"raw": raw}
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            msg_body = {"raw": raw}
 
             if send_mode == "💾 Save as Draft":
                 draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                df.loc[idx, "ThreadId"] = draft.get("message", {}).get("threadId", "")
-                df.loc[idx, "RfcMessageId"] = draft.get("message", {}).get("id", "")
-                df.loc[idx, "Status"] = "Draft"
+                return (draft.get("message", {}).get("threadId", ""), draft.get("message", {}).get("id", ""), "Draft")
             else:
                 sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-                msg_id = sent_msg.get("id", "")
-                df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
-                df.loc[idx, "RfcMessageId"] = fetch_message_id_header(service, msg_id) or msg_id
-                df.loc[idx, "Status"] = "Sent"
-                if send_mode == "🆕 New Email" and label_id:
-                    try:
-                        service.users().messages().modify(
-                            userId="me", id=msg_id, body={"addLabelIds": [label_id]}
-                        ).execute()
-                    except Exception:
-                        pass
-            sent_count += 1
-            batch_count += 1
-            if send_mode != "💾 Save as Draft":
-                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
+                return (sent_msg.get("threadId", ""), sent_msg.get("id", ""), "Sent")
         except Exception as e:
-            df.loc[idx, "Status"] = "Error"
-            errors.append((to_addr, str(e)))
-            st.error(f"Error for {to_addr}: {e}")
+            return (None, str(e), "Error")
 
-    progress.progress(100)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(send_one, idx, row): idx for idx, row in df.iterrows()}
+        for i, future in enumerate(as_completed(futures)):
+            idx = futures[future]
+            pct = int(((i + 1) / total) * 100)
+            progress.progress(pct)
+            try:
+                thread, msg_id, status = future.result()
+                df.loc[idx, "ThreadId"] = thread
+                df.loc[idx, "RfcMessageId"] = msg_id
+                df.loc[idx, "Status"] = status
+                if status == "Sent":
+                    sent_count += 1
+            except Exception as e:
+                errors.append((idx, str(e)))
+            status_box.info(f"Processed {i + 1}/{total}")
 
-    # Save and backup
+    # Save CSV
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
     file_name = f"Updated_{safe_label}_{timestamp}.csv"
-    file_path = os.path.join("/tmp", file_name)
-    df.to_csv(file_path, index=False)
+    file_path = os.path.join(tempfile.gettempdir(), file_name)
+    df.to_csv(file_path, index=False, encoding='utf-8-sig')
 
     try:
         send_email_backup(service, file_path)
@@ -357,7 +318,7 @@ if st.session_state["done"]:
     if summary.get("errors"):
         st.error(f"❌ {len(summary['errors'])} errors occurred.")
     if summary.get("skipped"):
-        st.warning(f"⚠️ Skipped: {summary['skipped']}")
+        st.warning(f"⚠️ Skipped some invalid emails.")
     with open(DONE_FILE, "r") as f:
         done_info = json.load(f)
     file_path = done_info.get("file")
