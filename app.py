@@ -20,7 +20,7 @@ from googleapiclient.discovery import build
 # ========================================
 # Streamlit Page Setup
 # ========================================
-st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
+st.set_page_config(page_title="Gmail Mail Merge For Phoenixx IT", layout="wide")
 st.title("📧 Gmail Mail Merge Tool for Phoenixx IT ")
 
 # ========================================
