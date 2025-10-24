@@ -59,6 +59,7 @@ if os.path.exists(DONE_FILE) and not st.session_state.get("done", False):
         file_path = done_info.get("file")
         if file_path and os.path.exists(file_path):
             st.success("✅ Previous mail merge completed successfully.")
+            st.session_state["file_path"] = file_path
             with open(file_path, "rb") as f:
                 st.download_button(
                     "⬇️ Download Updated CSV",
@@ -208,7 +209,7 @@ if not st.session_state["sending"]:
         # Editable data grid
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
-        # ✅ FIX: Sync deletions before sending
+        # ✅ Sync deletions before sending
         df = edited_df.reset_index(drop=True)
 
         pending_indices = df.index[df["Status"] != "Sent"].tolist()
@@ -358,6 +359,9 @@ if st.session_state["sending"]:
         file_path = os.path.join("/tmp", file_name)
         df.to_csv(file_path, index=False)
 
+        # ✅ Store file_path in session_state
+        st.session_state["file_path"] = file_path
+
         try:
             send_email_backup(service, file_path)
         except Exception as e:
@@ -382,8 +386,9 @@ if st.session_state["done"]:
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
 
-    # ✅ Show download button for updated CSV
-    try:
+    # ✅ Show download button using session_state
+    file_path = st.session_state.get("file_path")
+    if file_path and os.path.exists(file_path):
         with open(file_path, "rb") as f:
             st.download_button(
                 "⬇️ Download Updated CSV",
@@ -391,8 +396,6 @@ if st.session_state["done"]:
                 file_name=os.path.basename(file_path),
                 mime="text/csv",
             )
-    except Exception as e:
-        st.warning(f"⚠️ Could not provide download: {e}")
 
     if st.button("🔁 New Run / Reset"):
         if os.path.exists(DONE_FILE):
