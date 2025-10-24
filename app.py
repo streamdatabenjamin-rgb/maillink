@@ -58,13 +58,13 @@ if os.path.exists(DONE_FILE) and not st.session_state.get("done", False):
             done_info = json.load(f)
         file_path = done_info.get("file")
         if file_path and os.path.exists(file_path):
+            st.session_state["file_path"] = file_path  # Store in session_state
             st.success("✅ Previous mail merge completed successfully.")
-            st.session_state["file_path"] = file_path
-            with open(file_path, "rb") as f:
+            with open(st.session_state["file_path"], "rb") as f:
                 st.download_button(
                     "⬇️ Download Updated CSV",
                     data=f,
-                    file_name=os.path.basename(file_path),
+                    file_name=os.path.basename(st.session_state["file_path"]),
                     mime="text/csv",
                 )
             if st.button("🔁 Reset for New Run"):
