@@ -66,6 +66,10 @@ if os.path.exists(DONE_FILE) and not st.session_state.get("done", False):
                     file_name=os.path.basename(file_path),
                     mime="text/csv",
                 )
+            if st.button("🔁 Reset for New Run"):
+                os.remove(DONE_FILE)
+                st.session_state.clear()
+                st.experimental_rerun()
             st.stop()
     except Exception:
         pass
@@ -75,13 +79,11 @@ if os.path.exists(DONE_FILE) and not st.session_state.get("done", False):
 # ========================================
 EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
 
-
 def extract_email(value: str):
     if not value:
         return None
     match = EMAIL_REGEX.search(str(value))
     return match.group(0) if match else None
-
 
 def convert_bold(text):
     if not text:
@@ -99,7 +101,6 @@ def convert_bold(text):
     </body></html>
     """
 
-
 def get_or_create_label(service, label_name="Mail Merge Sent"):
     try:
         labels = service.users().labels().list(userId="me").execute().get("labels", [])
@@ -108,16 +109,11 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
                 return label["id"]
         created_label = service.users().labels().create(
             userId="me",
-            body={
-                "name": label_name,
-                "labelListVisibility": "labelShow",
-                "messageListVisibility": "show",
-            },
+            body={"name": label_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
         ).execute()
         return created_label["id"]
     except Exception:
         return None
-
 
 def send_email_backup(service, csv_path):
     try:
@@ -137,16 +133,12 @@ def send_email_backup(service, csv_path):
     except Exception as e:
         st.warning(f"⚠️ Could not send backup email: {e}")
 
-
 def fetch_message_id_header(service, message_id):
     for _ in range(6):
         try:
-            msg_detail = (
-                service.users()
-                .messages()
-                .get(userId="me", id=message_id, format="metadata", metadataHeaders=["Message-ID"])
-                .execute()
-            )
+            msg_detail = service.users().messages().get(
+                userId="me", id=message_id, format="metadata", metadataHeaders=["Message-ID"]
+            ).execute()
             headers = msg_detail.get("payload", {}).get("headers", [])
             for h in headers:
                 if h.get("name", "").lower() == "message-id":
@@ -176,12 +168,8 @@ else:
     else:
         flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
         flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
-        auth_url, _ = flow.authorization_url(
-            prompt="consent", access_type="offline", include_granted_scopes="true"
-        )
-        st.markdown(
-            f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account."
-        )
+        auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline", include_granted_scopes="true")
+        st.markdown(f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account.")
         st.stop()
 
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
@@ -214,29 +202,17 @@ if not st.session_state["sending"]:
             if col not in df.columns:
                 df[col] = ""
 
-        # ✅ Fix: reindex before computing pending_indices
         df.reset_index(drop=True, inplace=True)
-
         st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
 
-        # Editable table (user can delete rows)
+        # Editable data grid
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
-        # ✅ Apply deletions and edits
+        # ✅ FIX: Sync deletions before sending
         df = edited_df.reset_index(drop=True)
+
         pending_indices = df.index[df["Status"] != "Sent"].tolist()
 
-        # Download current CSV anytime
-        csv_data = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Download Current CSV",
-            data=csv_data,
-            file_name="current_mailmerge.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        # Template Editor
         subject_template = st.text_input("Subject", "Hello {Name}")
         body_template = st.text_area(
             "Body",
@@ -268,18 +244,16 @@ Thanks,
             st.markdown(preview_body, unsafe_allow_html=True)
 
         if st.button("🚀 Send Emails / Save Drafts"):
-            st.session_state.update(
-                {
-                    "sending": True,
-                    "df": df,
-                    "pending_indices": pending_indices,
-                    "subject_template": subject_template,
-                    "body_template": body_template,
-                    "label_name": label_name,
-                    "delay": delay,
-                    "send_mode": send_mode,
-                }
-            )
+            st.session_state.update({
+                "sending": True,
+                "df": df,
+                "pending_indices": pending_indices,
+                "subject_template": subject_template,
+                "body_template": body_template,
+                "label_name": label_name,
+                "delay": delay,
+                "send_mode": send_mode
+            })
             st.rerun()
 
 # ========================================
@@ -367,19 +341,19 @@ if st.session_state["sending"]:
             errors.append((to_addr, str(e)))
             st.error(f"Error for {to_addr}: {e}")
 
-    # Save and backup
+    # Save & backup
     if send_mode != "💾 Save as Draft":
         if sent_message_ids and label_id:
             try:
-                service.users()
-                .messages()
-                .batchModify(userId="me", body={"ids": sent_message_ids, "addLabelIds": [label_id]})
-                .execute()
+                service.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": sent_message_ids, "addLabelIds": [label_id]}
+                ).execute()
             except Exception as e:
                 st.warning(f"Batch labeling failed: {e}")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_label = re.sub(r"[^A-Za-z0-9_-]", "_", label_name)
+        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
         file_name = f"Updated_{safe_label}_{timestamp}.csv"
         file_path = os.path.join("/tmp", file_name)
         df.to_csv(file_path, index=False)
@@ -395,7 +369,6 @@ if st.session_state["sending"]:
     st.session_state["sending"] = False
     st.session_state["done"] = True
     st.session_state["summary"] = {"sent": sent_count, "errors": errors, "skipped": skipped}
-    st.session_state["output_file"] = file_path
     st.rerun()
 
 # ========================================
@@ -408,16 +381,6 @@ if st.session_state["done"]:
         st.error(f"❌ {len(summary['errors'])} errors occurred.")
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
-
-    if "output_file" in st.session_state and os.path.exists(st.session_state["output_file"]):
-        with open(st.session_state["output_file"], "rb") as f:
-            st.download_button(
-                "📥 Download Updated CSV",
-                data=f,
-                file_name=os.path.basename(st.session_state["output_file"]),
-                mime="text/csv",
-            )
-
     if st.button("🔁 New Run / Reset"):
         if os.path.exists(DONE_FILE):
             os.remove(DONE_FILE)
