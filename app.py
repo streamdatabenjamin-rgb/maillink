@@ -84,6 +84,7 @@ def extract_email(value: str):
     match = EMAIL_REGEX.search(str(value))
     return match.group(0) if match else None
 
+
 def convert_bold(text):
     if not text:
         return ""
@@ -100,6 +101,7 @@ def convert_bold(text):
     </body></html>
     """
 
+
 def get_or_create_label(service, label_name="Mail Merge Sent"):
     try:
         labels = service.users().labels().list(userId="me").execute().get("labels", [])
@@ -113,6 +115,7 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
         return created_label["id"]
     except Exception:
         return None
+
 
 def send_email_backup(service, csv_path):
     try:
@@ -131,6 +134,7 @@ def send_email_backup(service, csv_path):
         st.info(f"📧 Backup CSV emailed to {user_email}")
     except Exception as e:
         st.warning(f"⚠️ Could not send backup email: {e}")
+
 
 def fetch_message_id_header(service, message_id):
     for _ in range(6):
@@ -361,6 +365,8 @@ if st.session_state["sending"]:
         file_name = f"Updated_{safe_label}_{timestamp}.csv"
         file_path = os.path.join("/tmp", file_name)
         df.to_csv(file_path, index=False)
+        # store file path in session so UI can offer immediate download
+        st.session_state["file_path"] = file_path
         try:
             send_email_backup(service, file_path)
         except Exception as e:
@@ -384,6 +390,42 @@ if st.session_state["done"]:
         st.error(f"❌ {len(summary['errors'])} errors occurred.")
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
+
+    # --- NEW: Provide immediate CSV download in the UI without needing to reload ---
+    file_path = None
+    # Prefer session_state-stored file_path, fall back to done file
+    if st.session_state.get("file_path") and os.path.exists(st.session_state.get("file_path")):
+        file_path = st.session_state.get("file_path")
+    else:
+        try:
+            if os.path.exists(DONE_FILE):
+                with open(DONE_FILE, "r") as f:
+                    done_info = json.load(f)
+                possible = done_info.get("file")
+                if possible and os.path.exists(possible):
+                    file_path = possible
+        except Exception:
+            file_path = None
+
+    if file_path:
+        with open(file_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download Updated CSV",
+                data=f,
+                file_name=os.path.basename(file_path),
+                mime="text/csv",
+            )
+    else:
+        # Fallback: offer whatever is in session df as CSV
+        if st.session_state.get("df") is not None:
+            csv_bytes = st.session_state["df"].to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Updated CSV",
+                data=csv_bytes,
+                file_name="Updated_mailmerge.csv",
+                mime="text/csv",
+            )
+
     if st.button("🔁 New Run / Reset"):
         if os.path.exists(DONE_FILE):
             os.remove(DONE_FILE)
