@@ -381,6 +381,19 @@ if st.session_state["done"]:
         st.error(f"❌ {len(summary['errors'])} errors occurred.")
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
+
+    # ✅ Show download button for updated CSV
+    try:
+        with open(file_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download Updated CSV",
+                data=f,
+                file_name=os.path.basename(file_path),
+                mime="text/csv",
+            )
+    except Exception as e:
+        st.warning(f"⚠️ Could not provide download: {e}")
+
     if st.button("🔁 New Run / Reset"):
         if os.path.exists(DONE_FILE):
             os.remove(DONE_FILE)
