@@ -202,14 +202,17 @@ if not st.session_state["sending"]:
             if col not in df.columns:
                 df[col] = ""
 
-        # Reset index to avoid KeyError
         df.reset_index(drop=True, inplace=True)
+        st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
+
+        # Editable data grid
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+
+        # ✅ FIX: Sync deletions before sending
+        df = edited_df.reset_index(drop=True)
+
         pending_indices = df.index[df["Status"] != "Sent"].tolist()
 
-        st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
-        df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-
-        # Template Editor
         subject_template = st.text_input("Subject", "Hello {Name}")
         body_template = st.text_area(
             "Body",
@@ -240,7 +243,6 @@ Thanks,
             st.markdown(f"**Subject:** {preview_subject}")
             st.markdown(preview_body, unsafe_allow_html=True)
 
-        # Send Button
         if st.button("🚀 Send Emails / Save Drafts"):
             st.session_state.update({
                 "sending": True,
@@ -283,7 +285,6 @@ if st.session_state["sending"]:
         if send_mode != "💾 Save as Draft" and batch_count >= BATCH_SIZE_DEFAULT:
             break
 
-        # ✅ FIX: Use iloc to prevent KeyError
         row = df.iloc[idx]
 
         pct = int(((i + 1) / total) * 100)
