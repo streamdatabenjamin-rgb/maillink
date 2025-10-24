@@ -21,7 +21,7 @@ from googleapiclient.discovery import build
 # Streamlit Page Setup
 # ========================================
 st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
-st.title("📧 Gmail Mail Merge Tool (with Follow-up Replies + Draft Save)")
+st.title("📧 Gmail Mail Merge Tool for Phoenixx IT ")
 
 # ========================================
 # Gmail API Setup
@@ -189,7 +189,7 @@ if "done" not in st.session_state:
 # ========================================
 if not st.session_state["sending"]:
     st.header("📤 Upload Recipient List")
-    st.info("⚠️ Upload up to **70–80 contacts** for smooth performance.")
+    st.info("⚠️ List is processed in batch sending method 50 Rows per send")
     uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
     if uploaded_file:
