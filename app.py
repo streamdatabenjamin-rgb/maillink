@@ -1,5 +1,6 @@
 # ======================================== 
-# Gmail Mail Merge Tool - Modern UI Edition (Encoding Fix + Draft Default 110)-WITH #LOGO(27/10/25)FINAL
+# Gmail Mail Merge Tool - Modern UI Edition 
+# (Encoding Fix + Draft Default 110 + Reply Draft Logic)
 # ========================================
 import streamlit as st
 import pandas as pd
@@ -66,7 +67,7 @@ CLIENT_CONFIG = {
 # ========================================
 DONE_FILE = "/tmp/mailmerge_done.json"
 BATCH_SIZE_DEFAULT = 50
-DRAFT_BATCH_SIZE_DEFAULT = 110  # <--- NEW: Draft mode default batch size
+DRAFT_BATCH_SIZE_DEFAULT = 110  # default batch for draft mode
 
 # ========================================
 # Recovery Logic
@@ -210,27 +211,20 @@ if not st.session_state["sending"]:
     uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
     if uploaded_file:
-        # --- FIX: Safe CSV reading with encoding fallback ---
         if uploaded_file.name.lower().endswith("csv"):
             try:
                 df = pd.read_csv(uploaded_file, encoding="utf-8")
             except UnicodeDecodeError:
-                try:
-                    uploaded_file.seek(0)
-                    df = pd.read_csv(uploaded_file, encoding="latin1")
-                except Exception:
-                    st.error("⚠️ Unable to read the uploaded CSV. Please check that it's a valid CSV file.")
-                    st.stop()
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding="latin1")
         else:
             df = pd.read_excel(uploaded_file)
-        # -----------------------------------------------------
 
         for col in ["ThreadId", "RfcMessageId", "Status"]:
             if col not in df.columns:
                 df[col] = ""
 
         st.info("📌 Tip: Include 'ThreadId' and 'RfcMessageId' for follow-ups if available.")
-        st.markdown("### ✏️ Edit Your Contact List")
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
         st.markdown("---")
@@ -268,11 +262,8 @@ Thanks,
             st.markdown(preview_body, unsafe_allow_html=True)
 
         if st.button("🚀 Start Mail Merge"):
-            df = df.reset_index(drop=True)
-            df = df.fillna("")
-
+            df = df.reset_index(drop=True).fillna("")
             pending_indices = df.index[~df["Status"].isin(["Sent", "Draft"])].tolist()
-
             st.session_state.update({
                 "sending": True,
                 "df": df,
@@ -311,13 +302,11 @@ if st.session_state["sending"]:
     sent_message_ids = []
 
     for i, idx in enumerate(pending_indices):
-        # NEW: Draft mode gets batch limit 110
         batch_limit = DRAFT_BATCH_SIZE_DEFAULT if send_mode == "💾 Save as Draft" else BATCH_SIZE_DEFAULT
         if batch_count >= batch_limit:
             break
 
         row = df.loc[idx]
-
         pct = int(((i + 1) / total) * 100)
         progress.progress(min(max(pct, 0), 100))
         status_box.info(f"📩 Processing {i + 1}/{total}")
@@ -336,6 +325,7 @@ if st.session_state["sending"]:
             message["Subject"] = subject
 
             msg_body = {}
+            # --- Normal send/reply logic ---
             if send_mode == "↩️ Follow-up (Reply)":
                 thread_id = str(row.get("ThreadId", "")).strip()
                 rfc_id = str(row.get("RfcMessageId", "")).strip()
@@ -347,14 +337,25 @@ if st.session_state["sending"]:
                 else:
                     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
                     msg_body = {"raw": raw}
+
+            elif send_mode == "💾 Save as Draft":
+                # --- NEW: Reply draft logic ---
+                thread_id = str(row.get("ThreadId", "")).strip()
+                rfc_id = str(row.get("RfcMessageId", "")).strip()
+                if thread_id and rfc_id:
+                    message["In-Reply-To"] = rfc_id
+                    message["References"] = rfc_id
+                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+                    msg_body = {"raw": raw, "threadId": thread_id}
+                else:
+                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+                    msg_body = {"raw": raw}
+                service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
+                df.loc[idx, "Status"] = "Draft"
+
             else:
                 raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
                 msg_body = {"raw": raw}
-
-            if send_mode == "💾 Save as Draft":
-                service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                df.loc[idx, "Status"] = "Draft"
-            else:
                 sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
                 msg_id = sent_msg.get("id", "")
                 df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
@@ -382,12 +383,13 @@ if st.session_state["sending"]:
             except Exception as e:
                 st.warning(f"⚠️ Labeling failed: {e}")
 
-    # Save updated CSV & backup email
+    # Save updated CSV & backup
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
     file_name = f"Updated_{safe_label}_{timestamp}.csv"
     file_path = os.path.join("/tmp", file_name)
     df.to_csv(file_path, index=False)
+
     try:
         send_email_backup(service, file_path)
     except Exception as e:
