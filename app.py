@@ -1,6 +1,6 @@
 # ======================================== 
-# Gmail Mail Merge Tool - Modern UI Edition 
-# (Encoding Fix + Draft Default 110 + Reply Draft Logic)
+# Gmail Mail Merge Tool - Modern UI Edition
+# (Encoding Fix + Draft Default 110 + Reply Draft Support + ETA)
 # ========================================
 import streamlit as st
 import pandas as pd
@@ -10,7 +10,7 @@ import re
 import json
 import random
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -211,6 +211,7 @@ if not st.session_state["sending"]:
     uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
     if uploaded_file:
+        # Safe CSV reading with encoding fallback
         if uploaded_file.name.lower().endswith("csv"):
             try:
                 df = pd.read_csv(uploaded_file, encoding="utf-8")
@@ -225,15 +226,15 @@ if not st.session_state["sending"]:
                 df[col] = ""
 
         st.info("📌 Tip: Include 'ThreadId' and 'RfcMessageId' for follow-ups if available.")
+        st.markdown("### ✏️ Edit Your Contact List")
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
         st.markdown("---")
         st.subheader("🧩 Step 2: Email Template")
-
-        subject_template = st.text_input("✉️ Subject", "Hello {Name}")
+        subject_template = st.text_input("✉️ Subject", "{Name Company}")
         body_template = st.text_area(
             "📝 Body (Markdown + Variables like {Name})",
-            """Dear {Name},
+            """Hi {First Name},
 
 Welcome to **Mail Merge App** demo.
 
@@ -242,7 +243,7 @@ Thanks,
             height=250,
         )
 
-        label_name = st.text_input("🏷️ Gmail label", "Mail Merge Sent")
+        label_name = st.text_input("🏷️ Gmail label", "enter a label name")
         delay = st.slider("⏱️ Delay between emails (seconds)", 20, 75, 20)
         send_mode = st.radio("📬 Choose send mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
@@ -264,6 +265,7 @@ Thanks,
         if st.button("🚀 Start Mail Merge"):
             df = df.reset_index(drop=True).fillna("")
             pending_indices = df.index[~df["Status"].isin(["Sent", "Draft"])].tolist()
+
             st.session_state.update({
                 "sending": True,
                 "df": df,
@@ -272,12 +274,13 @@ Thanks,
                 "body_template": body_template,
                 "label_name": label_name,
                 "delay": delay,
-                "send_mode": send_mode
+                "send_mode": send_mode,
+                "start_time": time.time()
             })
             st.rerun()
 
 # ========================================
-# Sending Mode with Progress
+# Sending Mode with Progress + ETA
 # ========================================
 if st.session_state["sending"]:
     df = st.session_state["df"]
@@ -287,10 +290,11 @@ if st.session_state["sending"]:
     label_name = st.session_state["label_name"]
     delay = st.session_state["delay"]
     send_mode = st.session_state["send_mode"]
+    start_time = st.session_state.get("start_time", time.time())
 
     st.subheader("📨 Sending Emails...")
     progress = st.progress(0)
-    status_box = st.empty()
+    eta_text = st.empty()
 
     label_id = None
     if send_mode == "🆕 New Email":
@@ -307,8 +311,19 @@ if st.session_state["sending"]:
             break
 
         row = df.loc[idx]
+
         pct = int(((i + 1) / total) * 100)
         progress.progress(min(max(pct, 0), 100))
+
+        # --- ETA calculation ---
+        elapsed = time.time() - start_time
+        avg_per_email = elapsed / (i + 1) if i + 1 > 0 else 0
+        remaining = total - (i + 1)
+        est_seconds = int(avg_per_email * remaining)
+        eta_str = str(timedelta(seconds=est_seconds))
+        eta_text.info(f"⏳ Est. Time Remaining: {eta_str} ({i + 1}/{total})")
+
+        status_box = st.empty()
         status_box.info(f"📩 Processing {i + 1}/{total}")
 
         to_addr = extract_email(str(row.get("Email", "")).strip())
@@ -325,37 +340,22 @@ if st.session_state["sending"]:
             message["Subject"] = subject
 
             msg_body = {}
-            # --- Normal send/reply logic ---
-            if send_mode == "↩️ Follow-up (Reply)":
-                thread_id = str(row.get("ThreadId", "")).strip()
-                rfc_id = str(row.get("RfcMessageId", "")).strip()
-                if thread_id and rfc_id:
-                    message["In-Reply-To"] = rfc_id
-                    message["References"] = rfc_id
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                    msg_body = {"raw": raw, "threadId": thread_id}
-                else:
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                    msg_body = {"raw": raw}
-
-            elif send_mode == "💾 Save as Draft":
-                # --- NEW: Reply draft logic ---
-                thread_id = str(row.get("ThreadId", "")).strip()
-                rfc_id = str(row.get("RfcMessageId", "")).strip()
-                if thread_id and rfc_id:
-                    message["In-Reply-To"] = rfc_id
-                    message["References"] = rfc_id
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                    msg_body = {"raw": raw, "threadId": thread_id}
-                else:
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-                    msg_body = {"raw": raw}
-                service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                df.loc[idx, "Status"] = "Draft"
-
+            thread_id = str(row.get("ThreadId", "")).strip()
+            rfc_id = str(row.get("RfcMessageId", "")).strip()
+            if thread_id and rfc_id:
+                message["In-Reply-To"] = rfc_id
+                message["References"] = rfc_id
+                raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+                msg_body = {"raw": raw, "threadId": thread_id}
             else:
                 raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
                 msg_body = {"raw": raw}
+
+            if send_mode == "💾 Save as Draft":
+                # Draft mode works for both new emails and replies
+                service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
+                df.loc[idx, "Status"] = "Draft"
+            else:
                 sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
                 msg_id = sent_msg.get("id", "")
                 df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
@@ -373,23 +373,21 @@ if st.session_state["sending"]:
             st.error(f"❌ Error for {to_addr}: {e}")
 
     # Label + Backup
-    if send_mode != "💾 Save as Draft":
-        if sent_message_ids and label_id:
-            try:
-                service.users().messages().batchModify(
-                    userId="me",
-                    body={"ids": sent_message_ids, "addLabelIds": [label_id]}
-                ).execute()
-            except Exception as e:
-                st.warning(f"⚠️ Labeling failed: {e}")
+    if send_mode != "💾 Save as Draft" and sent_message_ids and label_id:
+        try:
+            service.users().messages().batchModify(
+                userId="me",
+                body={"ids": sent_message_ids, "addLabelIds": [label_id]}
+            ).execute()
+        except Exception as e:
+            st.warning(f"⚠️ Labeling failed: {e}")
 
-    # Save updated CSV & backup
+    # Save updated CSV & backup email
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
     file_name = f"Updated_{safe_label}_{timestamp}.csv"
     file_path = os.path.join("/tmp", file_name)
     df.to_csv(file_path, index=False)
-
     try:
         send_email_backup(service, file_path)
     except Exception as e:
